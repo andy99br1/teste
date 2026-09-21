@@ -33,7 +33,7 @@ details{margin-top:14px;background:#12151dee;border:1px solid var(--line);border
  </section>
  <details>
   <summary>⚙️ Busca aleatória no YouTube</summary>
-  <p>Este modo não usa lista fixa. Cada rodada mistura músicas fáceis, médias e difíceis: de grandes hits a sucessos de época e clássicos menos óbvios. Para jogar, salve uma chave da YouTube Data API v3.</p>
+  <p>Este modo não usa lista fixa. Cada rodada mistura músicas fáceis, médias e difíceis de vários estilos e décadas, sem ficar presa a um gênero específico. Para jogar, salve uma chave da YouTube Data API v3.</p>
   <div class="key"><input id="apiKey" type="password" placeholder="Chave da YouTube Data API v3"><button class="btn" id="saveKey">Salvar</button></div>
   <button class="btn" id="clearKey" style="margin-top:8px">Remover chave</button>
   <div class="small">A chave fica apenas neste navegador. Restrinja-a no Google Cloud ao endereço deste GitHub Pages. Ao revelar, a cobertura some e o próprio vídeo de karaokê aparece exatamente no ponto atual, mantendo a letra sincronizada.</div>
@@ -45,28 +45,43 @@ const SEARCHES={
   easy:[
    "karaokê maiores sucessos brasileiros",
    "karaokê hits brasileiros famosos",
+   "karaokê pop brasileiro hits",
    "karaokê sertanejo maiores sucessos",
+   "karaokê pagode maiores sucessos",
+   "karaokê samba sucessos",
    "karaokê MPB clássicos famosos",
    "karaokê rock nacional maiores sucessos",
-   "karaokê pagode maiores sucessos",
-   "karaokê pop brasileiro hits"
+   "karaokê forró sucessos",
+   "karaokê axé maiores sucessos"
   ],
   medium:[
-   "karaokê rock nacional anos 80",
-   "karaokê rock nacional anos 90",
-   "karaokê pop rock brasileiro anos 2000",
-   "karaokê MPB anos 70 80",
-   "karaokê pagode anos 90",
+   "karaokê anos 70 brasil sucessos",
+   "karaokê anos 80 brasil sucessos",
+   "karaokê anos 90 brasil sucessos",
+   "karaokê anos 2000 brasil sucessos",
+   "karaokê anos 2010 brasil sucessos",
+   "karaokê samba rock brasileiro",
+   "karaokê bossa nova clássicos",
+   "karaokê soul brasileiro",
+   "karaokê reggae brasileiro",
+   "karaokê rap brasileiro clássicos",
+   "karaokê funk brasileiro hits",
+   "karaokê forró anos 90 2000",
    "karaokê sertanejo anos 90 2000",
-   "karaokê axé anos 90",
-   "karaokê sucessos brasileiros nostálgicos"
+   "karaokê pagode anos 90 2000",
+   "karaokê pop rock brasileiro",
+   "karaokê indie brasileiro"
   ],
   hard:[
-   "karaokê clássicos brasileiros esquecidos",
-   "karaokê sucessos brasileiros antigos",
+   "karaokê sucessos brasileiros nostálgicos",
+   "karaokê clássicos brasileiros menos óbvios",
    "karaokê MPB clássicos menos conhecidos",
    "karaokê rock brasileiro clássico",
-   "karaokê hits brasileiros anos 80 90"
+   "karaokê samba clássicos antigos",
+   "karaokê soul funk brasileiro clássico",
+   "karaokê hits brasileiros esquecidos anos 80",
+   "karaokê hits brasileiros esquecidos anos 90",
+   "karaokê hits brasileiros esquecidos anos 2000"
   ]
  },
  intl:{
@@ -74,38 +89,59 @@ const SEARCHES={
    "biggest english hits karaoke",
    "famous english songs karaoke",
    "popular english songs karaoke",
-   "classic english karaoke songs",
-   "party hits karaoke english",
    "pop hits karaoke english",
-   "rock classics karaoke english"
+   "rock classics karaoke english",
+   "dance hits karaoke english",
+   "disco classics karaoke",
+   "r&b hits karaoke english",
+   "soul classics karaoke",
+   "country hits karaoke",
+   "party hits karaoke english",
+   "love songs karaoke english"
   ],
   medium:[
-   "80s new wave karaoke",
-   "80s synthpop karaoke",
-   "new romantic karaoke 80s",
-   "90s britpop karaoke",
-   "90s alternative hits karaoke",
+   "70s hits karaoke english",
+   "80s hits karaoke english",
+   "90s hits karaoke english",
+   "2000s hits karaoke english",
+   "2010s hits karaoke english",
+   "new wave karaoke",
+   "synthpop karaoke",
+   "britpop karaoke",
+   "alternative rock hits karaoke",
+   "grunge hits karaoke",
    "soft rock classics karaoke",
-   "classic MTV hits karaoke",
+   "indie rock classics karaoke",
+   "funk soul classics karaoke",
+   "motown karaoke classics",
+   "disco deep cuts karaoke",
+   "r&b classics karaoke",
+   "country classics karaoke",
+   "folk rock karaoke",
+   "power ballads karaoke",
    "one hit wonders karaoke english",
-   "70s 80s rock hits karaoke",
-   "2000s alternative rock karaoke",
-   "80s pop rock karaoke",
-   "Duran Duran karaoke",
-   "Tears for Fears karaoke",
-   "The Cure karaoke",
-   "A-ha karaoke",
-   "Depeche Mode karaoke"
+   "classic MTV hits karaoke",
+   "dance pop classics karaoke",
+   "hip hop crossover hits karaoke",
+   "reggae classics karaoke english",
+   "punk rock classics karaoke"
   ],
   hard:[
    "cult classic songs karaoke",
-   "80s alternative karaoke",
-   "new wave classics karaoke",
+   "forgotten 70s hits karaoke",
+   "forgotten 80s hits karaoke",
+   "forgotten 90s hits karaoke",
+   "forgotten 2000s hits karaoke",
+   "alternative classics karaoke",
    "indie classics karaoke",
    "post punk classics karaoke",
-   "british alternative classics karaoke",
-   "forgotten 80s hits karaoke",
-   "forgotten 90s hits karaoke"
+   "soul deep cuts karaoke",
+   "r&b deep cuts karaoke",
+   "classic country deep cuts karaoke",
+   "rock deep cuts karaoke",
+   "pop deep cuts karaoke english",
+   "disco deep cuts karaoke",
+   "new wave deep cuts karaoke"
   ],
   globalClassics:[
    "Voyage Voyage karaoke",
