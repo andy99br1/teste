@@ -33,7 +33,7 @@ details{margin-top:14px;background:#12151dee;border:1px solid var(--line);border
  </section>
  <details>
   <summary>⚙️ Busca aleatória no YouTube</summary>
-  <p>Este modo não usa lista fixa. Cada rodada mistura músicas fáceis, médias e difíceis, mas sempre tenta ficar dentro de hits, clássicos e músicas com alguma popularidade. Nas internacionais, o jogo prioriza inglês e só libera outros idiomas na pequena seleção de clássicos globais. Para jogar, salve uma chave da YouTube Data API v3.</p>
+  <p>Este modo não usa lista fixa. Cada rodada mistura músicas fáceis, médias e difíceis, mas sempre tenta ficar dentro de hits, clássicos e músicas com alguma popularidade, aceitando apenas vídeos que pareçam karaokê de uma única música. Nas internacionais, o jogo prioriza inglês e só libera outros idiomas na pequena seleção de clássicos globais. Para jogar, salve uma chave da YouTube Data API v3.</p>
   <div class="key"><input id="apiKey" type="password" placeholder="Chave da YouTube Data API v3"><button class="btn" id="saveKey">Salvar</button></div>
   <button class="btn" id="clearKey" style="margin-top:8px">Remover chave</button>
   <div class="small">A chave fica apenas neste navegador. Restrinja-a no Google Cloud ao endereço deste GitHub Pages. Ao revelar, a cobertura some e o próprio vídeo de karaokê aparece exatamente no ponto atual, mantendo a letra sincronizada.</div>
@@ -196,6 +196,7 @@ async function fetchPopularity(ids,apiKey){
    defaultLanguage:(x.snippet?.defaultLanguage||"").toLowerCase(),
    defaultAudioLanguage:(x.snippet?.defaultAudioLanguage||"").toLowerCase(),
    description:(x.snippet?.description||""),
+   categoryId:(x.snippet?.categoryId||""),
    duration:(x.contentDetails?.duration||"")
   };
  }
@@ -231,9 +232,22 @@ function isoDurationSeconds(v){
 
 function isJunkKaraokeResult(text,durationSeconds){
  const s=(text||"").toLowerCase();
- if(/#shorts?|\bshorts?\b|guess the song|guess this song|guess the track|name (all )?these|can you name|quiz|music quiz|song quiz|challenge|medley|mashup|compilation|karaoke compilation|playlist|top \d+|best of|snippet|teaser|preview|reaction|tutorial|lesson/i.test(s)) return true;
+ if(/#shorts?|\bshorts?\b|guess the song|guess this song|guess the track|name (all )?these|can you name|quiz|music quiz|song quiz|challenge|medley|mashup|compilation|karaoke compilation|playlist|top \d+|best of|snippet|teaser|preview|reaction|tutorial|lesson|plays? karaoke|karaoke roulette|carpool karaoke|karaoke game|karaoke battle|karaoke contest|karaoke competition|karaoke interview|celebrity karaoke|karaoke prank|karaoke session|karaoke party game|live at|behind the scenes|interview with/i.test(s)) return true;
  if(durationSeconds && durationSeconds<105) return true;
- if(durationSeconds && durationSeconds>720) return true;
+ if(durationSeconds && durationSeconds>600) return true;
+ return false;
+}
+
+function looksLikeSingleSongKaraoke(title){
+ const s=(title||"").toLowerCase();
+
+ // Strong indicators that the upload is the karaoke/backing track of one song.
+ const strong=/karaoke version|karaoke instrumental|karaoke lyrics|karaoke backing track|backing track|instrumental karaoke|karaokê|\(karaoke\)|\[karaoke\]| - karaoke\b| karaoke - /i.test(s);
+ if(strong) return true;
+
+ // Generic "karaoke" is accepted only when the title also looks like a normal song-title upload.
+ if(/karaoke/i.test(s) && /\s[-–—]\s|\(|\[|lyrics|instrumental/i.test(s)) return true;
+
  return false;
 }
 
@@ -250,6 +264,7 @@ async function searchYT(cat){
  const p=new URLSearchParams({
   part:"snippet",
   type:"video",
+  videoCategoryId:"10",
   maxResults:"50",
   q,
   order:"viewCount",
@@ -290,9 +305,12 @@ async function searchYT(cat){
    defaultLanguage:stats[x.id]?.defaultLanguage||"",
    defaultAudioLanguage:stats[x.id]?.defaultAudioLanguage||"",
    description:stats[x.id]?.description||"",
+   categoryId:stats[x.id]?.categoryId||"",
    durationSeconds:isoDurationSeconds(stats[x.id]?.duration||"")
   }))
   .filter(x=>stats[x.id]?.embeddable!==false)
+  .filter(x=>x.categoryId==="10")
+  .filter(x=>looksLikeSingleSongKaraoke(x.title))
   .filter(x=>!isJunkKaraokeResult(x.title+" "+x.channel+" "+x.description,x.durationSeconds))
   .filter(x=>{
    if(cat!=="intl" || search.isGlobalClassic) return true;
