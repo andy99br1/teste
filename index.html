@@ -28,7 +28,7 @@ details{margin-top:14px;background:#12151dee;border:1px solid var(--line);border
    <div class="actions"><button class="btn" id="pauseBtn" disabled>⏸ Pausar</button><button class="btn" id="restartBtn" disabled>↺ Início</button><button class="btn reveal" id="revealBtn" disabled>👀 Revelar</button><button class="btn" id="nextBtn" disabled>⏭ Próxima</button></div>
   </div>
   <div class="stage"><div id="player"></div><div class="cover" id="cover"><div><div class="mic">🎙️</div><h2 id="blindTitle">Preparando…</h2><p id="blindSub">O player do YouTube está carregando.</p></div></div></div>
-  <div class="status"><span class="pill">Rodada <b id="round">0</b></span><span class="pill" id="modeLabel">Brasileiras</span><span class="pill" id="state">Aguardando</span></div>
+  <div class="status"><span class="pill">Rodada <b id="round">0</b></span><span class="pill" id="modeLabel">Brasileiras</span><span class="pill" id="difficultyPill">Dificuldade: —</span><span class="pill" id="state">Aguardando</span></div>
   <div class="answer" id="answer"><div class="answerbox"><div style="color:var(--muted);font-size:12px">ERA ESTA MÚSICA</div><strong id="answerTitle">—</strong><p id="answerChannel">—</p></div></div>
  </section>
  <details>
@@ -296,6 +296,7 @@ async function start(){
   current=await pick();
   last.unshift(current.id);last=last.slice(0,12);
   round++;$("round").textContent=round;
+  $("difficultyPill").textContent="Dificuldade: "+difficultyLabel(current.difficulty);
   $("cover").classList.remove("hidden");$("answer").classList.remove("show");
   $("blindTitle").textContent="Rodada "+round;
   $("blindSub").textContent="O vídeo e a letra estão escondidos. Tente reconhecer só pelo áudio.";
@@ -305,6 +306,7 @@ async function start(){
   setTimeout(()=>{try{player.playVideo()}catch(e){}},300);
  }catch(e){
   current=null;
+  $("difficultyPill").textContent="Dificuldade: —";
   ["pauseBtn","restartBtn","revealBtn","nextBtn"].forEach(x=>$(x).disabled=true);
   $("state").textContent="Erro na busca";
   const msg=String(e&&e.message||e);
@@ -326,7 +328,7 @@ window.onYouTubeIframeAPIReady=()=>{player=new YT.Player("player",{host:"https:/
 $("newBtn").onclick=start;$("nextBtn").onclick=start;$("revealBtn").onclick=()=>{if(!current)return;const t=Math.max(0,player.getCurrentTime?player.getCurrentTime():0);$("cover").classList.add("hidden");$("answer").classList.add("show");$("answerTitle").textContent=current.title;$("answerChannel").textContent="Canal: "+current.channel+" • dificuldade "+difficultyLabel(current.difficulty)+" • revelado em "+Math.floor(t/60)+":"+String(Math.floor(t%60)).padStart(2,"0");$("state").textContent="Revelada • letra sincronizada"};
 $("pauseBtn").onclick=()=>{if(!current)return;paused?player.playVideo():player.pauseVideo()};$("restartBtn").onclick=()=>{if(!current)return;player.seekTo(0,true);player.playVideo()};
 $("saveKey").onclick=()=>{const v=$("apiKey").value.trim();if(!v)return toast("Cole uma chave primeiro.");localStorage.setItem("blindKaraokeApiKey",v);$("newBtn").disabled=!ready;$("newBtn").textContent=ready?"🎲 Sortear e tocar":"⏳ Carregando YouTube…";$("state").textContent=ready?"Pronto":"Carregando";toast("Chave salva. Agora cada rodada buscará karaokês populares no YouTube.")};
-$("clearKey").onclick=()=>{localStorage.removeItem("blindKaraokeApiKey");$("apiKey").value="";$("newBtn").textContent="🔑 Configure sua API";$("state").textContent="API necessária";toast("Chave removida. O jogo não usará lista fixa.")};$("apiKey").value=key();
+$("clearKey").onclick=()=>{localStorage.removeItem("blindKaraokeApiKey");$("apiKey").value="";$("difficultyPill").textContent="Dificuldade: —";$("newBtn").textContent="🔑 Configure sua API";$("state").textContent="API necessária";toast("Chave removida. O jogo não usará lista fixa.")};$("apiKey").value=key();
 const s=document.createElement("script");
 s.src="https://www.youtube.com/iframe_api";
 s.async=true;
