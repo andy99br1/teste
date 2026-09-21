@@ -33,25 +33,29 @@ details{margin-top:14px;background:#12151dee;border:1px solid var(--line);border
  </section>
  <details>
   <summary>⚙️ Busca aleatória no YouTube</summary>
-  <p>Sem chave, o jogo usa uma seleção de teste. Para buscar novos karaokês a cada rodada, salve uma chave da YouTube Data API v3.</p>
+  <p>Este modo não usa lista fixa. Cada rodada faz uma nova busca no YouTube. Para jogar, salve uma chave da YouTube Data API v3.</p>
   <div class="key"><input id="apiKey" type="password" placeholder="Chave da YouTube Data API v3"><button class="btn" id="saveKey">Salvar</button></div>
   <button class="btn" id="clearKey" style="margin-top:8px">Remover chave</button>
-  <div class="small">A chave fica apenas neste navegador. Restrinja-a no Google Cloud ao endereço deste GitHub Pages.</div>
+  <div class="small">A chave fica apenas neste navegador. Restrinja-a no Google Cloud ao endereço deste GitHub Pages. Ao revelar, a cobertura some e o próprio vídeo de karaokê aparece exatamente no ponto atual, mantendo a letra sincronizada.</div>
  </details>
 </div><div class="toast" id="toast"></div>
 <script>
-const DEMO={
- br:[
-  {id:"oPEsF8Rj0w8",title:"Tempo Perdido — Legião Urbana (Karaokê)",channel:"Singer! Karaokê"},
-  {id:"_Ebr2wqNXBc",title:"Evidências — Karaokê Instrumental",channel:"Karaoke Instrumental"},
-  {id:"c-0mKdKHXkI",title:"Evidências — Karaokê",channel:"Roberto Carlos"}
- ],
- intl:[
-  {id:"sPMA1tqWuf4",title:"Perfect — Ed Sheeran (Karaoke Version)",channel:"Sing King"},
-  {id:"PD5sXfNFwhw",title:"Shallow — Lady Gaga & Bradley Cooper (Piano Karaoke)",channel:"Sing King"}
- ]
+const SEARCHES={
+ br:{
+  bases:["karaokê brasileiro com letra","karaoke brasileiro letra","karaokê sucessos brasileiros","karaokê sertanejo com letra","karaokê MPB com letra","karaokê rock nacional com letra","karaokê pagode com letra","karaokê pop brasileiro com letra","karaokê anos 80 brasil","karaokê anos 90 brasil","karaokê anos 2000 brasil"],
+  extras:["sucesso","clássico","hit","voz masculina","voz feminina","fácil","difícil","romântica","animada","popular","com letra"]
+ },
+ intl:{
+  bases:["karaoke lyrics","karaoke version lyrics","pop karaoke lyrics","rock karaoke lyrics","80s karaoke lyrics","90s karaoke lyrics","2000s karaoke lyrics","party karaoke lyrics","love songs karaoke lyrics","classic karaoke lyrics","female karaoke lyrics","male karaoke lyrics"],
+  extras:["hit","classic","popular","easy","hard","party","ballad","upbeat","acoustic","lyrics on screen"]
+ }
 };
-const SEARCHES={br:["karaokê brasileiro sucessos","karaokê sertanejo","karaokê mpb","karaokê rock nacional","karaokê pagode brasil","karaokê pop brasileiro"],intl:["karaoke pop hits","karaoke rock classics","karaoke 80s hits","karaoke 90s hits","karaoke party songs","karaoke love songs"]};
+function randomSearchQuery(cat){
+ const cfg=SEARCHES[cat];
+ const year = Math.random()<0.35 ? String(1970 + Math.floor(Math.random()*56)) : "";
+ const extra = Math.random()<0.75 ? rand(cfg.extras) : "";
+ return [rand(cfg.bases),extra,year].filter(Boolean).join(" ");
+}
 let player,ready=false,mode="br",current=null,round=0,paused=false,last=[];
 const $=id=>document.getElementById(id);
 function toast(s){const e=$("toast");e.textContent=s;e.classList.add("show");clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove("show"),3000)}
@@ -61,27 +65,82 @@ function decode(s){const t=document.createElement("textarea");t.innerHTML=s;retu
 function setMode(m){mode=m;document.querySelectorAll("[data-mode]").forEach(b=>b.classList.toggle("active",b.dataset.mode===m));$("modeLabel").textContent=m==="br"?"Brasileiras":m==="intl"?"Internacionais":"Ambas"}
 document.querySelectorAll("[data-mode]").forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
 async function searchYT(cat){
- const p=new URLSearchParams({part:"snippet",type:"video",maxResults:"30",q:rand(SEARCHES[cat]),safeSearch:"moderate",videoEmbeddable:"true",videoSyndicated:"true",regionCode:"BR",relevanceLanguage:cat==="br"?"pt":"en",key:key()});
- const r=await fetch("https://www.googleapis.com/youtube/v3/search?"+p);if(!r.ok)throw new Error("API "+r.status);
- const d=await r.json();const a=(d.items||[]).filter(x=>x.id&&x.id.videoId).map(x=>({id:x.id.videoId,title:decode(x.snippet.title),channel:decode(x.snippet.channelTitle)})).filter(x=>/karaok|instrumental/i.test(x.title)).filter(x=>!last.includes(x.id));
- if(!a.length)throw new Error("sem resultados");return rand(a)
+ const apiKey=key();
+ if(!apiKey) throw new Error("NO_KEY");
+ const p=new URLSearchParams({
+  part:"snippet",type:"video",maxResults:"50",
+  q:randomSearchQuery(cat),
+  safeSearch:"moderate",
+  videoEmbeddable:"true",
+  videoSyndicated:"true",
+  regionCode:"BR",
+  relevanceLanguage:cat==="br"?"pt":"en",
+  key:apiKey
+ });
+ const r=await fetch("https://www.googleapis.com/youtube/v3/search?"+p);
+ if(!r.ok){
+  let msg="API_"+r.status;
+  try{const er=await r.json();msg=er?.error?.message||msg}catch(_){}
+  throw new Error(msg);
+ }
+ const d=await r.json();
+ let a=(d.items||[])
+  .filter(x=>x.id&&x.id.videoId)
+  .map(x=>({id:x.id.videoId,title:decode(x.snippet.title),channel:decode(x.snippet.channelTitle)}))
+  .filter(x=>/karaok/i.test(x.title))
+  .filter(x=>!/reaction|tutorial|how to|cover with vocals|vocal cover/i.test(x.title))
+  .filter(x=>!last.includes(x.id));
+ if(!a.length) throw new Error("NO_RESULTS");
+ const withLyrics=a.filter(x=>/lyric|letra|karaokê|karaoke version/i.test(x.title));
+ return rand(withLyrics.length?withLyrics:a)
 }
-function demo(cat){const a=cat==="both"?[...DEMO.br,...DEMO.intl]:DEMO[cat],b=a.filter(x=>!last.includes(x.id));return rand(b.length?b:a)}
-async function pick(){const cat=mode==="both"?(Math.random()<.5?"br":"intl"):mode;if(key()){try{return await searchYT(cat)}catch(e){toast("Busca dinâmica falhou; usando seleção de teste.")}}return demo(cat)}
+async function pick(){
+ const cat=mode==="both"?(Math.random()<.5?"br":"intl"):mode;
+ return await searchYT(cat)
+}
 async function start(){
  if(!ready)return;
- $("newBtn").disabled=true;$("newBtn").textContent="⏳ Sorteando…";
- try{current=await pick();last.unshift(current.id);last=last.slice(0,5);round++;$("round").textContent=round;$("cover").classList.remove("hidden");$("answer").classList.remove("show");$("blindTitle").textContent="Rodada "+round;$("blindSub").textContent="Reconhece só pelo instrumental?";$("state").textContent="Carregando…";["pauseBtn","restartBtn","revealBtn","nextBtn"].forEach(x=>$(x).disabled=false);player.loadVideoById(current.id);setTimeout(()=>{try{player.playVideo()}catch(e){}},300)}
- finally{$("newBtn").disabled=false;$("newBtn").textContent="▶ Sortear e tocar"}
+ if(!key()){
+  document.querySelector("details").open=true;
+  $("apiKey").focus();
+  toast("Salve uma chave da YouTube Data API para começar.");
+  return;
+ }
+ $("newBtn").disabled=true;$("newBtn").textContent="⏳ Buscando um karaokê aleatório…";
+ try{
+  current=await pick();
+  last.unshift(current.id);last=last.slice(0,12);
+  round++;$("round").textContent=round;
+  $("cover").classList.remove("hidden");$("answer").classList.remove("show");
+  $("blindTitle").textContent="Rodada "+round;
+  $("blindSub").textContent="O vídeo e a letra estão escondidos. Tente reconhecer só pelo áudio.";
+  $("state").textContent="Carregando…";
+  ["pauseBtn","restartBtn","revealBtn","nextBtn"].forEach(x=>$(x).disabled=false);
+  player.loadVideoById(current.id);
+  setTimeout(()=>{try{player.playVideo()}catch(e){}},300);
+ }catch(e){
+  current=null;
+  ["pauseBtn","restartBtn","revealBtn","nextBtn"].forEach(x=>$(x).disabled=true);
+  $("state").textContent="Erro na busca";
+  const msg=String(e&&e.message||e);
+  if(msg==="NO_KEY") toast("Configure sua chave da YouTube Data API.");
+  else if(msg==="NO_RESULTS") toast("Não achei um karaokê nessa busca. Toque novamente para sortear outra pesquisa.");
+  else if(/quota|exceeded/i.test(msg)) toast("A cota da API do YouTube foi atingida hoje.");
+  else if(/key|referer|forbidden|403/i.test(msg)) toast("A chave foi recusada. Confira as restrições da API/referrer.");
+  else toast("Não consegui buscar no YouTube: "+msg);
+ }finally{
+  $("newBtn").disabled=false;
+  $("newBtn").textContent=key()?"🎲 Sortear e tocar":"🔑 Configure sua API";
+ }
 }
 window.onYouTubeIframeAPIReady=()=>{player=new YT.Player("player",{host:"https://www.youtube.com",playerVars:{playsinline:1,rel:0,controls:1,enablejsapi:1,origin:location.origin},events:{
- onReady:()=>{ready=true;$("newBtn").disabled=false;$("newBtn").textContent="▶ Sortear e tocar";$("state").textContent="Pronto";$("blindSub").textContent="Escolha a categoria e toque em Sortear e tocar."},
+ onReady:()=>{ready=true;$("newBtn").disabled=false;$("newBtn").textContent=key()?"🎲 Sortear e tocar":"🔑 Configure sua API";$("state").textContent=key()?"Pronto":"API necessária";$("blindSub").textContent=key()?"Escolha a categoria e toque em Sortear e tocar.":"Abra as configurações abaixo e salve sua chave da YouTube Data API."},
  onStateChange:e=>{if(e.data===YT.PlayerState.PLAYING){$("state").textContent="Às cegas • tocando";paused=false;$("pauseBtn").textContent="⏸ Pausar"}else if(e.data===YT.PlayerState.PAUSED){$("state").textContent="Pausada";paused=true;$("pauseBtn").textContent="▶ Continuar"}else if(e.data===YT.PlayerState.ENDED)$("state").textContent="Terminou"},
  onError:e=>{toast("Esse vídeo não pôde ser reproduzido. Sorteando outro…");setTimeout(start,600)}
 }})};
-$("newBtn").onclick=start;$("nextBtn").onclick=start;$("revealBtn").onclick=()=>{if(!current)return;$("cover").classList.add("hidden");$("answer").classList.add("show");$("answerTitle").textContent=current.title;$("answerChannel").textContent="Canal: "+current.channel;$("state").textContent="Revelada"};
+$("newBtn").onclick=start;$("nextBtn").onclick=start;$("revealBtn").onclick=()=>{if(!current)return;const t=Math.max(0,player.getCurrentTime?player.getCurrentTime():0);$("cover").classList.add("hidden");$("answer").classList.add("show");$("answerTitle").textContent=current.title;$("answerChannel").textContent="Canal: "+current.channel+" • revelado em "+Math.floor(t/60)+":"+String(Math.floor(t%60)).padStart(2,"0");$("state").textContent="Revelada • letra sincronizada"};
 $("pauseBtn").onclick=()=>{if(!current)return;paused?player.playVideo():player.pauseVideo()};$("restartBtn").onclick=()=>{if(!current)return;player.seekTo(0,true);player.playVideo()};
-$("saveKey").onclick=()=>{const v=$("apiKey").value.trim();if(!v)return toast("Cole uma chave primeiro.");localStorage.setItem("blindKaraokeApiKey",v);toast("Chave salva. As próximas rodadas usarão busca dinâmica.")};
-$("clearKey").onclick=()=>{localStorage.removeItem("blindKaraokeApiKey");$("apiKey").value="";toast("Chave removida.")};$("apiKey").value=key();
+$("saveKey").onclick=()=>{const v=$("apiKey").value.trim();if(!v)return toast("Cole uma chave primeiro.");localStorage.setItem("blindKaraokeApiKey",v);$("newBtn").disabled=!ready;$("newBtn").textContent=ready?"🎲 Sortear e tocar":"⏳ Carregando YouTube…";$("state").textContent=ready?"Pronto":"Carregando";toast("Chave salva. Agora cada rodada fará uma nova busca no YouTube.")};
+$("clearKey").onclick=()=>{localStorage.removeItem("blindKaraokeApiKey");$("apiKey").value="";$("newBtn").textContent="🔑 Configure sua API";$("state").textContent="API necessária";toast("Chave removida. O jogo não usará lista fixa.")};$("apiKey").value=key();
 const s=document.createElement("script");s.src="https://www.youtube.com/iframe_api";s.async=true;s.onerror=()=>{$("blindTitle").textContent="Não consegui carregar o YouTube";$("blindSub").textContent="Confira a conexão ou bloqueadores de conteúdo."; $("state").textContent="Player indisponível"};document.head.appendChild(s);
 </script></body></html>
