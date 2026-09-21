@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#090b10">
+<title>Karaokê às Cegas</title>
+<style>
+:root{--bg:#090b10;--card:#12151d;--txt:#f7f7fb;--muted:#9da4b5;--a:#8b5cf6;--b:#ec4899;--line:#ffffff18}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0,#8b5cf633,transparent 35rem),linear-gradient(#0b0d13,#06070a);color:var(--txt);font:16px system-ui,-apple-system,Segoe UI,sans-serif;min-height:100vh;padding:14px}
+.app{max-width:760px;margin:auto}.top{display:flex;gap:12px;align-items:center;margin:8px 0 16px}.logo{width:52px;height:52px;border-radius:16px;display:grid;place-items:center;font-size:28px;background:linear-gradient(135deg,var(--a),var(--b))}
+h1{margin:0;font-size:28px}p{margin:4px 0;color:var(--muted)}.card{background:#12151dee;border:1px solid var(--line);border-radius:24px;overflow:hidden;box-shadow:0 20px 70px #0008}
+.controls{padding:14px;border-bottom:1px solid var(--line);display:grid;gap:12px}.seg{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;background:#0b0e14;border:1px solid var(--line);padding:5px;border-radius:15px}
+button,input{font:inherit}.seg button,.btn{border:0;border-radius:11px;padding:12px;color:white;background:#1a1e28;font-weight:800}.seg button{color:var(--muted);background:transparent}.seg button.active{color:white;background:linear-gradient(135deg,var(--a),var(--b))}
+.actions{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.btn.primary{background:linear-gradient(135deg,var(--a),var(--b))}.btn.reveal{background:linear-gradient(135deg,#f97316,#ef4444)}button:disabled{opacity:.45}
+.stage{position:relative;aspect-ratio:16/9;background:#000;margin:14px;border-radius:18px;overflow:hidden}.stage iframe,#player{width:100%!important;height:100%!important}.cover{position:absolute;inset:0;z-index:5;display:grid;place-items:center;text-align:center;padding:24px;background:radial-gradient(circle,#8b5cf633,transparent 55%),linear-gradient(135deg,#0d1017,#08090d)}.cover.hidden{display:none}.mic{font-size:54px}.cover h2{margin:8px 0 4px;font-size:30px}.status{display:flex;gap:8px;flex-wrap:wrap;padding:0 14px 14px}.pill{background:#191d27;border:1px solid var(--line);border-radius:999px;padding:8px 11px;color:var(--muted)}.answer{display:none;padding:0 14px 14px}.answer.show{display:block}.answerbox{background:#0d1017;border:1px solid var(--line);border-radius:16px;padding:14px}.answer strong{font-size:20px}
+details{margin-top:14px;background:#12151dee;border:1px solid var(--line);border-radius:18px;padding:14px}summary{font-weight:800;cursor:pointer}.key{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:12px}input{min-width:0;background:#0a0d12;border:1px solid var(--line);color:#fff;border-radius:12px;padding:12px}.small{font-size:12px;color:var(--muted);margin-top:8px}.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:#171b24;border:1px solid var(--line);padding:11px 14px;border-radius:12px;display:none;max-width:calc(100vw - 24px);text-align:center}.toast.show{display:block}
+@media(min-width:640px){.actions{grid-template-columns:repeat(4,1fr)}}
+</style>
+</head>
+<body>
+<div class="app">
+ <div class="top"><div class="logo">🎤</div><div><h1>Karaokê às Cegas</h1><p>Ouça primeiro. Revele só quando quiser.</p></div></div>
+ <section class="card">
+  <div class="controls">
+   <div class="seg"><button data-mode="br" class="active">🇧🇷 Brasil</button><button data-mode="intl">🌍 Internacional</button><button data-mode="both">🎲 Ambas</button></div>
+   <button class="btn primary" id="newBtn" disabled>⏳ Carregando YouTube…</button>
+   <div class="actions"><button class="btn" id="pauseBtn" disabled>⏸ Pausar</button><button class="btn" id="restartBtn" disabled>↺ Início</button><button class="btn reveal" id="revealBtn" disabled>👀 Revelar</button><button class="btn" id="nextBtn" disabled>⏭ Próxima</button></div>
+  </div>
+  <div class="stage"><div id="player"></div><div class="cover" id="cover"><div><div class="mic">🎙️</div><h2 id="blindTitle">Preparando…</h2><p id="blindSub">O player do YouTube está carregando.</p></div></div></div>
+  <div class="status"><span class="pill">Rodada <b id="round">0</b></span><span class="pill" id="modeLabel">Brasileiras</span><span class="pill" id="state">Aguardando</span></div>
+  <div class="answer" id="answer"><div class="answerbox"><div style="color:var(--muted);font-size:12px">ERA ESTA MÚSICA</div><strong id="answerTitle">—</strong><p id="answerChannel">—</p></div></div>
+ </section>
+ <details>
+  <summary>⚙️ Busca aleatória no YouTube</summary>
+  <p>Sem chave, o jogo usa uma seleção de teste. Para buscar novos karaokês a cada rodada, salve uma chave da YouTube Data API v3.</p>
+  <div class="key"><input id="apiKey" type="password" placeholder="Chave da YouTube Data API v3"><button class="btn" id="saveKey">Salvar</button></div>
+  <button class="btn" id="clearKey" style="margin-top:8px">Remover chave</button>
+  <div class="small">A chave fica apenas neste navegador. Restrinja-a no Google Cloud ao endereço deste GitHub Pages.</div>
+ </details>
+</div><div class="toast" id="toast"></div>
+<script>
+const DEMO={
+ br:[
+  {id:"oPEsF8Rj0w8",title:"Tempo Perdido — Legião Urbana (Karaokê)",channel:"Singer! Karaokê"},
+  {id:"_Ebr2wqNXBc",title:"Evidências — Karaokê Instrumental",channel:"Karaoke Instrumental"},
+  {id:"c-0mKdKHXkI",title:"Evidências — Karaokê",channel:"Roberto Carlos"}
+ ],
+ intl:[
+  {id:"sPMA1tqWuf4",title:"Perfect — Ed Sheeran (Karaoke Version)",channel:"Sing King"},
+  {id:"PD5sXfNFwhw",title:"Shallow — Lady Gaga & Bradley Cooper (Piano Karaoke)",channel:"Sing King"}
+ ]
+};
+const SEARCHES={br:["karaokê brasileiro sucessos","karaokê sertanejo","karaokê mpb","karaokê rock nacional","karaokê pagode brasil","karaokê pop brasileiro"],intl:["karaoke pop hits","karaoke rock classics","karaoke 80s hits","karaoke 90s hits","karaoke party songs","karaoke love songs"]};
+let player,ready=false,mode="br",current=null,round=0,paused=false,last=[];
+const $=id=>document.getElementById(id);
+function toast(s){const e=$("toast");e.textContent=s;e.classList.add("show");clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove("show"),3000)}
+function key(){return localStorage.getItem("blindKaraokeApiKey")||""}
+function rand(a){return a[Math.floor(Math.random()*a.length)]}
+function decode(s){const t=document.createElement("textarea");t.innerHTML=s;return t.value}
+function setMode(m){mode=m;document.querySelectorAll("[data-mode]").forEach(b=>b.classList.toggle("active",b.dataset.mode===m));$("modeLabel").textContent=m==="br"?"Brasileiras":m==="intl"?"Internacionais":"Ambas"}
+document.querySelectorAll("[data-mode]").forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
+async function searchYT(cat){
+ const p=new URLSearchParams({part:"snippet",type:"video",maxResults:"30",q:rand(SEARCHES[cat]),safeSearch:"moderate",videoEmbeddable:"true",videoSyndicated:"true",regionCode:"BR",relevanceLanguage:cat==="br"?"pt":"en",key:key()});
+ const r=await fetch("https://www.googleapis.com/youtube/v3/search?"+p);if(!r.ok)throw new Error("API "+r.status);
+ const d=await r.json();const a=(d.items||[]).filter(x=>x.id&&x.id.videoId).map(x=>({id:x.id.videoId,title:decode(x.snippet.title),channel:decode(x.snippet.channelTitle)})).filter(x=>/karaok|instrumental/i.test(x.title)).filter(x=>!last.includes(x.id));
+ if(!a.length)throw new Error("sem resultados");return rand(a)
+}
+function demo(cat){const a=cat==="both"?[...DEMO.br,...DEMO.intl]:DEMO[cat],b=a.filter(x=>!last.includes(x.id));return rand(b.length?b:a)}
+async function pick(){const cat=mode==="both"?(Math.random()<.5?"br":"intl"):mode;if(key()){try{return await searchYT(cat)}catch(e){toast("Busca dinâmica falhou; usando seleção de teste.")}}return demo(cat)}
+async function start(){
+ if(!ready)return;
+ $("newBtn").disabled=true;$("newBtn").textContent="⏳ Sorteando…";
+ try{current=await pick();last.unshift(current.id);last=last.slice(0,5);round++;$("round").textContent=round;$("cover").classList.remove("hidden");$("answer").classList.remove("show");$("blindTitle").textContent="Rodada "+round;$("blindSub").textContent="Reconhece só pelo instrumental?";$("state").textContent="Carregando…";["pauseBtn","restartBtn","revealBtn","nextBtn"].forEach(x=>$(x).disabled=false);player.loadVideoById(current.id);setTimeout(()=>{try{player.playVideo()}catch(e){}},300)}
+ finally{$("newBtn").disabled=false;$("newBtn").textContent="▶ Sortear e tocar"}
+}
+window.onYouTubeIframeAPIReady=()=>{player=new YT.Player("player",{host:"https://www.youtube.com",playerVars:{playsinline:1,rel:0,controls:1,enablejsapi:1,origin:location.origin},events:{
+ onReady:()=>{ready=true;$("newBtn").disabled=false;$("newBtn").textContent="▶ Sortear e tocar";$("state").textContent="Pronto";$("blindSub").textContent="Escolha a categoria e toque em Sortear e tocar."},
+ onStateChange:e=>{if(e.data===YT.PlayerState.PLAYING){$("state").textContent="Às cegas • tocando";paused=false;$("pauseBtn").textContent="⏸ Pausar"}else if(e.data===YT.PlayerState.PAUSED){$("state").textContent="Pausada";paused=true;$("pauseBtn").textContent="▶ Continuar"}else if(e.data===YT.PlayerState.ENDED)$("state").textContent="Terminou"},
+ onError:e=>{toast("Esse vídeo não pôde ser reproduzido. Sorteando outro…");setTimeout(start,600)}
+}})};
+$("newBtn").onclick=start;$("nextBtn").onclick=start;$("revealBtn").onclick=()=>{if(!current)return;$("cover").classList.add("hidden");$("answer").classList.add("show");$("answerTitle").textContent=current.title;$("answerChannel").textContent="Canal: "+current.channel;$("state").textContent="Revelada"};
+$("pauseBtn").onclick=()=>{if(!current)return;paused?player.playVideo():player.pauseVideo()};$("restartBtn").onclick=()=>{if(!current)return;player.seekTo(0,true);player.playVideo()};
+$("saveKey").onclick=()=>{const v=$("apiKey").value.trim();if(!v)return toast("Cole uma chave primeiro.");localStorage.setItem("blindKaraokeApiKey",v);toast("Chave salva. As próximas rodadas usarão busca dinâmica.")};
+$("clearKey").onclick=()=>{localStorage.removeItem("blindKaraokeApiKey");$("apiKey").value="";toast("Chave removida.")};$("apiKey").value=key();
+const s=document.createElement("script");s.src="https://www.youtube.com/iframe_api";s.async=true;s.onerror=()=>{$("blindTitle").textContent="Não consegui carregar o YouTube";$("blindSub").textContent="Confira a conexão ou bloqueadores de conteúdo."; $("state").textContent="Player indisponível"};document.head.appendChild(s);
+</script></body></html>
