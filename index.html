@@ -153,6 +153,7 @@ const SEARCHES={
    "Dernière Danse karaoke",
    "Bésame Mucho karaoke"
   ]
+ }
 };
 
 function chooseDifficulty(){
@@ -318,7 +319,7 @@ async function start(){
  }
 }
 window.onYouTubeIframeAPIReady=()=>{player=new YT.Player("player",{host:"https://www.youtube.com",playerVars:{playsinline:1,rel:0,controls:1,enablejsapi:1,origin:location.origin},events:{
- onReady:()=>{ready=true;$("newBtn").disabled=false;$("newBtn").textContent=key()?"🎲 Sortear e tocar":"🔑 Configure sua API";$("state").textContent=key()?"Pronto":"API necessária";$("blindSub").textContent=key()?"Escolha a categoria e toque em Sortear e tocar.":"Abra as configurações abaixo e salve sua chave da YouTube Data API."},
+ onReady:()=>{clearTimeout(ytLoadTimer);ready=true;$("newBtn").disabled=false;$("newBtn").textContent=key()?"🎲 Sortear e tocar":"🔑 Configure sua API";$("state").textContent=key()?"Pronto":"API necessária";$("blindSub").textContent=key()?"Escolha a categoria e toque em Sortear e tocar.":"Abra as configurações abaixo e salve sua chave da YouTube Data API."},
  onStateChange:e=>{if(e.data===YT.PlayerState.PLAYING){$("state").textContent="Às cegas • tocando";paused=false;$("pauseBtn").textContent="⏸ Pausar"}else if(e.data===YT.PlayerState.PAUSED){$("state").textContent="Pausada";paused=true;$("pauseBtn").textContent="▶ Continuar"}else if(e.data===YT.PlayerState.ENDED)$("state").textContent="Terminou"},
  onError:e=>{toast("Esse vídeo não pôde ser reproduzido. Sorteando outro…");setTimeout(start,600)}
 }})};
@@ -326,5 +327,21 @@ $("newBtn").onclick=start;$("nextBtn").onclick=start;$("revealBtn").onclick=()=>
 $("pauseBtn").onclick=()=>{if(!current)return;paused?player.playVideo():player.pauseVideo()};$("restartBtn").onclick=()=>{if(!current)return;player.seekTo(0,true);player.playVideo()};
 $("saveKey").onclick=()=>{const v=$("apiKey").value.trim();if(!v)return toast("Cole uma chave primeiro.");localStorage.setItem("blindKaraokeApiKey",v);$("newBtn").disabled=!ready;$("newBtn").textContent=ready?"🎲 Sortear e tocar":"⏳ Carregando YouTube…";$("state").textContent=ready?"Pronto":"Carregando";toast("Chave salva. Agora cada rodada buscará karaokês populares no YouTube.")};
 $("clearKey").onclick=()=>{localStorage.removeItem("blindKaraokeApiKey");$("apiKey").value="";$("newBtn").textContent="🔑 Configure sua API";$("state").textContent="API necessária";toast("Chave removida. O jogo não usará lista fixa.")};$("apiKey").value=key();
-const s=document.createElement("script");s.src="https://www.youtube.com/iframe_api";s.async=true;s.onerror=()=>{$("blindTitle").textContent="Não consegui carregar o YouTube";$("blindSub").textContent="Confira a conexão ou bloqueadores de conteúdo."; $("state").textContent="Player indisponível"};document.head.appendChild(s);
+const s=document.createElement("script");
+s.src="https://www.youtube.com/iframe_api";
+s.async=true;
+let ytLoadTimer=setTimeout(()=>{
+ if(!ready){
+  $("blindTitle").textContent="O YouTube demorou para responder";
+  $("blindSub").textContent="Recarregue a página. Se continuar, confira bloqueadores de conteúdo ou DNS privado.";
+  $("state").textContent="Player não carregou";
+ }
+},12000);
+s.onerror=()=>{
+ clearTimeout(ytLoadTimer);
+ $("blindTitle").textContent="Não consegui carregar o YouTube";
+ $("blindSub").textContent="Confira a conexão ou bloqueadores de conteúdo.";
+ $("state").textContent="Player indisponível";
+};
+document.head.appendChild(s);
 </script></body></html>
