@@ -33,7 +33,7 @@ details{margin-top:14px;background:#12151dee;border:1px solid var(--line);border
  </section>
  <details>
   <summary>⚙️ Busca aleatória no YouTube</summary>
-  <p>Este modo não usa lista fixa. Cada rodada mistura músicas fáceis, médias e difíceis de vários estilos e décadas, sem ficar presa a um gênero específico. Para jogar, salve uma chave da YouTube Data API v3.</p>
+  <p>Este modo não usa lista fixa. Cada rodada mistura músicas fáceis, médias e difíceis de vários estilos e décadas. Nas internacionais, o jogo prioriza inglês e só libera outros idiomas na pequena seleção de clássicos globais. Para jogar, salve uma chave da YouTube Data API v3.</p>
   <div class="key"><input id="apiKey" type="password" placeholder="Chave da YouTube Data API v3"><button class="btn" id="saveKey">Salvar</button></div>
   <button class="btn" id="clearKey" style="margin-top:8px">Remover chave</button>
   <div class="small">A chave fica apenas neste navegador. Restrinja-a no Google Cloud ao endereço deste GitHub Pages. Ao revelar, a cobertura some e o próprio vídeo de karaokê aparece exatamente no ponto atual, mantendo a letra sincronizada.</div>
@@ -181,7 +181,7 @@ function difficultyLabel(d){
 async function fetchPopularity(ids,apiKey){
  if(!ids.length) return {};
  const p=new URLSearchParams({
-  part:"statistics,status",
+  part:"statistics,status,snippet",
   id:ids.join(","),
   key:apiKey
  });
@@ -192,7 +192,10 @@ async function fetchPopularity(ids,apiKey){
  for(const x of d.items||[]){
   map[x.id]={
    views:Number(x.statistics?.viewCount||0),
-   embeddable:x.status?.embeddable!==false
+   embeddable:x.status?.embeddable!==false,
+   defaultLanguage:(x.snippet?.defaultLanguage||"").toLowerCase(),
+   defaultAudioLanguage:(x.snippet?.defaultAudioLanguage||"").toLowerCase(),
+   description:(x.snippet?.description||"")
   };
  }
  return map;
@@ -205,13 +208,29 @@ function rand(a){return a[Math.floor(Math.random()*a.length)]}
 function decode(s){const t=document.createElement("textarea");t.innerHTML=s;return t.value}
 function setMode(m){mode=m;document.querySelectorAll("[data-mode]").forEach(b=>b.classList.toggle("active",b.dataset.mode===m));$("modeLabel").textContent=m==="br"?"Brasileiras":m==="intl"?"Internacionais":"Ambas"}
 document.querySelectorAll("[data-mode]").forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
+function isEnglishLanguageCode(code){
+ if(!code) return null;
+ return code==="en" || code.startsWith("en-") || code.startsWith("en_");
+}
+
+function hasBlockedIntlTerms(text){
+ const s=(text||"").toLowerCase();
+ return /\b(tagalog|filipino|pinoy|opm|bisaya|cebuano|videoke|minus one|karaoke ph|philippines karaoke|español|espanol|spanish karaoke|français|francais|french karaoke|deutsch|german karaoke|italiano|italian karaoke|portugu[eê]s|portuguese karaoke|hindi karaoke|tamil karaoke|telugu karaoke|korean karaoke|japanese karaoke|thai karaoke|vietnamese karaoke|indonesian karaoke|malay karaoke)\b/i.test(s);
+}
+
+function intlSearchExclusions(){
+ return " -tagalog -filipino -pinoy -opm -bisaya -cebuano -videoke -spanish -español -french -français -german -deutsch -italian -italiano -portuguese -português -hindi -tamil -telugu -korean -japanese -thai -vietnamese -indonesian";
+}
+
 async function searchYT(cat){
  const apiKey=key();
  if(!apiKey) throw new Error("NO_KEY");
 
  const search=randomSearchQuery(cat);
- const q=search.q;
  const difficulty=search.difficulty;
+ const q=(cat==="intl" && !search.isGlobalClassic)
+  ? search.q + intlSearchExclusions()
+  : search.q;
  const p=new URLSearchParams({
   part:"snippet",
   type:"video",
@@ -249,8 +268,26 @@ async function searchYT(cat){
 
  const stats=await fetchPopularity(candidates.map(x=>x.id),apiKey);
  candidates=candidates
-  .map(x=>({...x,views:stats[x.id]?.views||0}))
+  .map(x=>({
+   ...x,
+   views:stats[x.id]?.views||0,
+   defaultLanguage:stats[x.id]?.defaultLanguage||"",
+   defaultAudioLanguage:stats[x.id]?.defaultAudioLanguage||"",
+   description:stats[x.id]?.description||""
+  }))
   .filter(x=>stats[x.id]?.embeddable!==false)
+  .filter(x=>{
+   if(cat!=="intl" || search.isGlobalClassic) return true;
+
+   // If the uploader explicitly declares a language/audio language and it is not English, reject it.
+   const declared=[x.defaultAudioLanguage,x.defaultLanguage].filter(Boolean);
+   if(declared.length && !declared.some(isEnglishLanguageCode)) return false;
+
+   // Many karaoke uploads omit language metadata, so also reject obvious non-English markers.
+   if(hasBlockedIntlTerms(x.title+" "+x.channel+" "+x.description)) return false;
+
+   return true;
+  })
   .sort((a,b)=>b.views-a.views);
 
  if(!candidates.length) throw new Error("NO_RESULTS");
@@ -275,7 +312,7 @@ async function searchYT(cat){
 
  const chosen=rand(pool);
  chosen.difficulty=difficulty;
- chosen.searchQuery=q;
+ chosen.searchQuery=search.q;
  return chosen;
 }
 
