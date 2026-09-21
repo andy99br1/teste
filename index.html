@@ -33,7 +33,7 @@ details{margin-top:14px;background:#12151dee;border:1px solid var(--line);border
  </section>
  <details>
   <summary>⚙️ Busca aleatória no YouTube</summary>
-  <p>Este modo não usa lista fixa. Cada rodada busca karaokês de músicas populares e sorteia entre os resultados mais assistidos. Para jogar, salve uma chave da YouTube Data API v3.</p>
+  <p>Este modo não usa lista fixa. Cada rodada mistura músicas fáceis, médias e difíceis: de grandes hits a sucessos de época e clássicos menos óbvios. Para jogar, salve uma chave da YouTube Data API v3.</p>
   <div class="key"><input id="apiKey" type="password" placeholder="Chave da YouTube Data API v3"><button class="btn" id="saveKey">Salvar</button></div>
   <button class="btn" id="clearKey" style="margin-top:8px">Remover chave</button>
   <div class="small">A chave fica apenas neste navegador. Restrinja-a no Google Cloud ao endereço deste GitHub Pages. Ao revelar, a cobertura some e o próprio vídeo de karaokê aparece exatamente no ponto atual, mantendo a letra sincronizada.</div>
@@ -41,50 +41,104 @@ details{margin-top:14px;background:#12151dee;border:1px solid var(--line);border
 </div><div class="toast" id="toast"></div>
 <script>
 const SEARCHES={
- br:[
-  "karaokê sucessos brasileiros com letra",
-  "karaokê hits brasileiros",
-  "karaokê músicas famosas brasil",
-  "karaokê sertanejo sucessos",
-  "karaokê MPB clássicos",
-  "karaokê rock nacional sucessos",
-  "karaokê pagode sucessos",
-  "karaokê pop brasileiro sucessos",
-  "karaokê anos 80 brasil sucessos",
-  "karaokê anos 90 brasil sucessos",
-  "karaokê anos 2000 brasil sucessos"
- ],
- intlEnglish:[
-  "popular english songs karaoke lyrics",
-  "biggest english hits karaoke",
-  "famous english songs karaoke",
-  "classic english karaoke songs",
-  "80s english hits karaoke",
-  "90s english hits karaoke",
-  "2000s english hits karaoke",
-  "2010s english hits karaoke",
-  "pop hits karaoke english",
-  "rock classics karaoke english",
-  "party hits karaoke english",
-  "love songs karaoke english"
- ],
- globalClassics:[
-  "Voyage Voyage karaoke",
-  "La Vie En Rose karaoke",
-  "99 Luftballons karaoke",
-  "Despacito karaoke",
-  "Dragostea Din Tei karaoke",
-  "Volare karaoke",
-  "Dernière Danse karaoke",
-  "Bésame Mucho karaoke"
- ]
+ br:{
+  easy:[
+   "karaokê maiores sucessos brasileiros",
+   "karaokê hits brasileiros famosos",
+   "karaokê sertanejo maiores sucessos",
+   "karaokê MPB clássicos famosos",
+   "karaokê rock nacional maiores sucessos",
+   "karaokê pagode maiores sucessos",
+   "karaokê pop brasileiro hits"
+  ],
+  medium:[
+   "karaokê rock nacional anos 80",
+   "karaokê rock nacional anos 90",
+   "karaokê pop rock brasileiro anos 2000",
+   "karaokê MPB anos 70 80",
+   "karaokê pagode anos 90",
+   "karaokê sertanejo anos 90 2000",
+   "karaokê axé anos 90",
+   "karaokê sucessos brasileiros nostálgicos"
+  ],
+  hard:[
+   "karaokê clássicos brasileiros esquecidos",
+   "karaokê sucessos brasileiros antigos",
+   "karaokê MPB clássicos menos conhecidos",
+   "karaokê rock brasileiro clássico",
+   "karaokê hits brasileiros anos 80 90"
+  ]
+ },
+ intl:{
+  easy:[
+   "biggest english hits karaoke",
+   "famous english songs karaoke",
+   "popular english songs karaoke",
+   "classic english karaoke songs",
+   "party hits karaoke english",
+   "pop hits karaoke english",
+   "rock classics karaoke english"
+  ],
+  medium:[
+   "80s new wave karaoke",
+   "80s synthpop karaoke",
+   "new romantic karaoke 80s",
+   "90s britpop karaoke",
+   "90s alternative hits karaoke",
+   "soft rock classics karaoke",
+   "classic MTV hits karaoke",
+   "one hit wonders karaoke english",
+   "70s 80s rock hits karaoke",
+   "2000s alternative rock karaoke",
+   "80s pop rock karaoke",
+   "Duran Duran karaoke",
+   "Tears for Fears karaoke",
+   "The Cure karaoke",
+   "A-ha karaoke",
+   "Depeche Mode karaoke"
+  ],
+  hard:[
+   "cult classic songs karaoke",
+   "80s alternative karaoke",
+   "new wave classics karaoke",
+   "indie classics karaoke",
+   "post punk classics karaoke",
+   "british alternative classics karaoke",
+   "forgotten 80s hits karaoke",
+   "forgotten 90s hits karaoke"
+  ],
+  globalClassics:[
+   "Voyage Voyage karaoke",
+   "La Vie En Rose karaoke",
+   "99 Luftballons karaoke",
+   "Despacito karaoke",
+   "Dragostea Din Tei karaoke",
+   "Volare karaoke",
+   "Dernière Danse karaoke",
+   "Bésame Mucho karaoke"
+  ]
 };
 
+function chooseDifficulty(){
+ const r=Math.random();
+ return r<0.45?"easy":r<0.85?"medium":"hard";
+}
+
 function randomSearchQuery(cat){
- if(cat==="br") return rand(SEARCHES.br);
- // 92% das rodadas internacionais procuram sucessos em inglês.
- // Os outros 8% usam apenas buscas de clássicos mundiais muito conhecidos.
- return Math.random()<0.92 ? rand(SEARCHES.intlEnglish) : rand(SEARCHES.globalClassics);
+ const difficulty=chooseDifficulty();
+ if(cat==="br"){
+  return {q:rand(SEARCHES.br[difficulty]),difficulty,isGlobalClassic:false};
+ }
+ // Internacionais continuam majoritariamente em inglês.
+ // Uma pequena chance usa clássicos globais muito conhecidos em outros idiomas.
+ if(Math.random()<0.08){
+  return {q:rand(SEARCHES.intl.globalClassics),difficulty:"medium",isGlobalClassic:true};
+ }
+ return {q:rand(SEARCHES.intl[difficulty]),difficulty,isGlobalClassic:false};
+}
+
+function difficultyLabel(d){
+ return d==="easy"?"fácil":d==="medium"?"média":"difícil";
 }
 
 async function fetchPopularity(ids,apiKey){
@@ -118,8 +172,9 @@ async function searchYT(cat){
  const apiKey=key();
  if(!apiKey) throw new Error("NO_KEY");
 
- const q=randomSearchQuery(cat);
- const isGlobalClassic=cat==="intl" && SEARCHES.globalClassics.includes(q);
+ const search=randomSearchQuery(cat);
+ const q=search.q;
+ const difficulty=search.difficulty;
  const p=new URLSearchParams({
   part:"snippet",
   type:"video",
@@ -163,18 +218,28 @@ async function searchYT(cat){
 
  if(!candidates.length) throw new Error("NO_RESULTS");
 
- // Mantém só os karaokês realmente fortes daquela busca.
- // Se houver bastante resultado, exige também um piso de visualizações.
- const minViews=cat==="br"?100000:500000;
- const strong=candidates.filter(x=>x.views>=minViews);
- const ranked=(strong.length>=6?strong:candidates).slice(0,12);
+ // A dificuldade controla o quão fundo entramos nos resultados populares.
+ // "Difícil" ainda precisa ter alguma tração: não queremos karaokês totalmente obscuros.
+ const floorByTier=cat==="br"
+  ? {easy:100000,medium:30000,hard:8000}
+  : {easy:500000,medium:100000,hard:25000};
 
- // Para internacionais comuns, a consulta já é explicitamente por músicas em inglês.
- // Outros idiomas só entram no ramo raro de clássicos globais.
- const pool=isGlobalClassic?ranked:ranked;
+ const minViews=floorByTier[difficulty];
+ const viable=candidates.filter(x=>x.views>=minViews);
+ const base=viable.length>=5?viable:candidates;
 
+ let pool;
+ if(difficulty==="easy") pool=base.slice(0,10);
+ else if(difficulty==="medium") pool=base.slice(4,22);
+ else pool=base.slice(10,35);
+
+ if(pool.length<3) pool=base.slice(0,Math.min(15,base.length));
  if(!pool.length) throw new Error("NO_RESULTS");
- return rand(pool);
+
+ const chosen=rand(pool);
+ chosen.difficulty=difficulty;
+ chosen.searchQuery=q;
+ return chosen;
 }
 
 async function pick(){
@@ -221,7 +286,7 @@ window.onYouTubeIframeAPIReady=()=>{player=new YT.Player("player",{host:"https:/
  onStateChange:e=>{if(e.data===YT.PlayerState.PLAYING){$("state").textContent="Às cegas • tocando";paused=false;$("pauseBtn").textContent="⏸ Pausar"}else if(e.data===YT.PlayerState.PAUSED){$("state").textContent="Pausada";paused=true;$("pauseBtn").textContent="▶ Continuar"}else if(e.data===YT.PlayerState.ENDED)$("state").textContent="Terminou"},
  onError:e=>{toast("Esse vídeo não pôde ser reproduzido. Sorteando outro…");setTimeout(start,600)}
 }})};
-$("newBtn").onclick=start;$("nextBtn").onclick=start;$("revealBtn").onclick=()=>{if(!current)return;const t=Math.max(0,player.getCurrentTime?player.getCurrentTime():0);$("cover").classList.add("hidden");$("answer").classList.add("show");$("answerTitle").textContent=current.title;$("answerChannel").textContent="Canal: "+current.channel+" • revelado em "+Math.floor(t/60)+":"+String(Math.floor(t%60)).padStart(2,"0");$("state").textContent="Revelada • letra sincronizada"};
+$("newBtn").onclick=start;$("nextBtn").onclick=start;$("revealBtn").onclick=()=>{if(!current)return;const t=Math.max(0,player.getCurrentTime?player.getCurrentTime():0);$("cover").classList.add("hidden");$("answer").classList.add("show");$("answerTitle").textContent=current.title;$("answerChannel").textContent="Canal: "+current.channel+" • dificuldade "+difficultyLabel(current.difficulty)+" • revelado em "+Math.floor(t/60)+":"+String(Math.floor(t%60)).padStart(2,"0");$("state").textContent="Revelada • letra sincronizada"};
 $("pauseBtn").onclick=()=>{if(!current)return;paused?player.playVideo():player.pauseVideo()};$("restartBtn").onclick=()=>{if(!current)return;player.seekTo(0,true);player.playVideo()};
 $("saveKey").onclick=()=>{const v=$("apiKey").value.trim();if(!v)return toast("Cole uma chave primeiro.");localStorage.setItem("blindKaraokeApiKey",v);$("newBtn").disabled=!ready;$("newBtn").textContent=ready?"🎲 Sortear e tocar":"⏳ Carregando YouTube…";$("state").textContent=ready?"Pronto":"Carregando";toast("Chave salva. Agora cada rodada buscará karaokês populares no YouTube.")};
 $("clearKey").onclick=()=>{localStorage.removeItem("blindKaraokeApiKey");$("apiKey").value="";$("newBtn").textContent="🔑 Configure sua API";$("state").textContent="API necessária";toast("Chave removida. O jogo não usará lista fixa.")};$("apiKey").value=key();
