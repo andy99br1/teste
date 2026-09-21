@@ -33,7 +33,7 @@ details{margin-top:14px;background:#12151dee;border:1px solid var(--line);border
  </section>
  <details>
   <summary>⚙️ Busca aleatória no YouTube</summary>
-  <p>Este modo não usa lista fixa. Cada rodada faz uma nova busca no YouTube. Para jogar, salve uma chave da YouTube Data API v3.</p>
+  <p>Este modo não usa lista fixa. Cada rodada busca karaokês de músicas populares e sorteia entre os resultados mais assistidos. Para jogar, salve uma chave da YouTube Data API v3.</p>
   <div class="key"><input id="apiKey" type="password" placeholder="Chave da YouTube Data API v3"><button class="btn" id="saveKey">Salvar</button></div>
   <button class="btn" id="clearKey" style="margin-top:8px">Remover chave</button>
   <div class="small">A chave fica apenas neste navegador. Restrinja-a no Google Cloud ao endereço deste GitHub Pages. Ao revelar, a cobertura some e o próprio vídeo de karaokê aparece exatamente no ponto atual, mantendo a letra sincronizada.</div>
@@ -41,20 +41,70 @@ details{margin-top:14px;background:#12151dee;border:1px solid var(--line);border
 </div><div class="toast" id="toast"></div>
 <script>
 const SEARCHES={
- br:{
-  bases:["karaokê brasileiro com letra","karaoke brasileiro letra","karaokê sucessos brasileiros","karaokê sertanejo com letra","karaokê MPB com letra","karaokê rock nacional com letra","karaokê pagode com letra","karaokê pop brasileiro com letra","karaokê anos 80 brasil","karaokê anos 90 brasil","karaokê anos 2000 brasil"],
-  extras:["sucesso","clássico","hit","voz masculina","voz feminina","fácil","difícil","romântica","animada","popular","com letra"]
- },
- intl:{
-  bases:["karaoke lyrics","karaoke version lyrics","pop karaoke lyrics","rock karaoke lyrics","80s karaoke lyrics","90s karaoke lyrics","2000s karaoke lyrics","party karaoke lyrics","love songs karaoke lyrics","classic karaoke lyrics","female karaoke lyrics","male karaoke lyrics"],
-  extras:["hit","classic","popular","easy","hard","party","ballad","upbeat","acoustic","lyrics on screen"]
- }
+ br:[
+  "karaokê sucessos brasileiros com letra",
+  "karaokê hits brasileiros",
+  "karaokê músicas famosas brasil",
+  "karaokê sertanejo sucessos",
+  "karaokê MPB clássicos",
+  "karaokê rock nacional sucessos",
+  "karaokê pagode sucessos",
+  "karaokê pop brasileiro sucessos",
+  "karaokê anos 80 brasil sucessos",
+  "karaokê anos 90 brasil sucessos",
+  "karaokê anos 2000 brasil sucessos"
+ ],
+ intlEnglish:[
+  "popular english songs karaoke lyrics",
+  "biggest english hits karaoke",
+  "famous english songs karaoke",
+  "classic english karaoke songs",
+  "80s english hits karaoke",
+  "90s english hits karaoke",
+  "2000s english hits karaoke",
+  "2010s english hits karaoke",
+  "pop hits karaoke english",
+  "rock classics karaoke english",
+  "party hits karaoke english",
+  "love songs karaoke english"
+ ],
+ globalClassics:[
+  "Voyage Voyage karaoke",
+  "La Vie En Rose karaoke",
+  "99 Luftballons karaoke",
+  "Despacito karaoke",
+  "Dragostea Din Tei karaoke",
+  "Volare karaoke",
+  "Dernière Danse karaoke",
+  "Bésame Mucho karaoke"
+ ]
 };
+
 function randomSearchQuery(cat){
- const cfg=SEARCHES[cat];
- const year = Math.random()<0.35 ? String(1970 + Math.floor(Math.random()*56)) : "";
- const extra = Math.random()<0.75 ? rand(cfg.extras) : "";
- return [rand(cfg.bases),extra,year].filter(Boolean).join(" ");
+ if(cat==="br") return rand(SEARCHES.br);
+ // 92% das rodadas internacionais procuram sucessos em inglês.
+ // Os outros 8% usam apenas buscas de clássicos mundiais muito conhecidos.
+ return Math.random()<0.92 ? rand(SEARCHES.intlEnglish) : rand(SEARCHES.globalClassics);
+}
+
+async function fetchPopularity(ids,apiKey){
+ if(!ids.length) return {};
+ const p=new URLSearchParams({
+  part:"statistics,status",
+  id:ids.join(","),
+  key:apiKey
+ });
+ const r=await fetch("https://www.googleapis.com/youtube/v3/videos?"+p);
+ if(!r.ok) return {};
+ const d=await r.json();
+ const map={};
+ for(const x of d.items||[]){
+  map[x.id]={
+   views:Number(x.statistics?.viewCount||0),
+   embeddable:x.status?.embeddable!==false
+  };
+ }
+ return map;
 }
 let player,ready=false,mode="br",current=null,round=0,paused=false,last=[];
 const $=id=>document.getElementById(id);
@@ -67,33 +117,66 @@ document.querySelectorAll("[data-mode]").forEach(b=>b.onclick=()=>setMode(b.data
 async function searchYT(cat){
  const apiKey=key();
  if(!apiKey) throw new Error("NO_KEY");
+
+ const q=randomSearchQuery(cat);
+ const isGlobalClassic=cat==="intl" && SEARCHES.globalClassics.includes(q);
  const p=new URLSearchParams({
-  part:"snippet",type:"video",maxResults:"50",
-  q:randomSearchQuery(cat),
+  part:"snippet",
+  type:"video",
+  maxResults:"50",
+  q,
+  order:"viewCount",
   safeSearch:"moderate",
   videoEmbeddable:"true",
   videoSyndicated:"true",
-  regionCode:"BR",
+  regionCode:cat==="br"?"BR":"US",
   relevanceLanguage:cat==="br"?"pt":"en",
   key:apiKey
  });
+
  const r=await fetch("https://www.googleapis.com/youtube/v3/search?"+p);
  if(!r.ok){
   let msg="API_"+r.status;
   try{const er=await r.json();msg=er?.error?.message||msg}catch(_){}
   throw new Error(msg);
  }
+
  const d=await r.json();
- let a=(d.items||[])
+ let candidates=(d.items||[])
   .filter(x=>x.id&&x.id.videoId)
-  .map(x=>({id:x.id.videoId,title:decode(x.snippet.title),channel:decode(x.snippet.channelTitle)}))
+  .map(x=>({
+   id:x.id.videoId,
+   title:decode(x.snippet.title),
+   channel:decode(x.snippet.channelTitle)
+  }))
   .filter(x=>/karaok/i.test(x.title))
-  .filter(x=>!/reaction|tutorial|how to|cover with vocals|vocal cover/i.test(x.title))
+  .filter(x=>!/reaction|tutorial|how to|cover with vocals|vocal cover|lesson/i.test(x.title))
   .filter(x=>!last.includes(x.id));
- if(!a.length) throw new Error("NO_RESULTS");
- const withLyrics=a.filter(x=>/lyric|letra|karaokê|karaoke version/i.test(x.title));
- return rand(withLyrics.length?withLyrics:a)
+
+ if(!candidates.length) throw new Error("NO_RESULTS");
+
+ const stats=await fetchPopularity(candidates.map(x=>x.id),apiKey);
+ candidates=candidates
+  .map(x=>({...x,views:stats[x.id]?.views||0}))
+  .filter(x=>stats[x.id]?.embeddable!==false)
+  .sort((a,b)=>b.views-a.views);
+
+ if(!candidates.length) throw new Error("NO_RESULTS");
+
+ // Mantém só os karaokês realmente fortes daquela busca.
+ // Se houver bastante resultado, exige também um piso de visualizações.
+ const minViews=cat==="br"?100000:500000;
+ const strong=candidates.filter(x=>x.views>=minViews);
+ const ranked=(strong.length>=6?strong:candidates).slice(0,12);
+
+ // Para internacionais comuns, a consulta já é explicitamente por músicas em inglês.
+ // Outros idiomas só entram no ramo raro de clássicos globais.
+ const pool=isGlobalClassic?ranked:ranked;
+
+ if(!pool.length) throw new Error("NO_RESULTS");
+ return rand(pool);
 }
+
 async function pick(){
  const cat=mode==="both"?(Math.random()<.5?"br":"intl"):mode;
  return await searchYT(cat)
@@ -106,7 +189,7 @@ async function start(){
   toast("Salve uma chave da YouTube Data API para começar.");
   return;
  }
- $("newBtn").disabled=true;$("newBtn").textContent="⏳ Buscando um karaokê aleatório…";
+ $("newBtn").disabled=true;$("newBtn").textContent="⏳ Buscando um karaokê popular…";
  try{
   current=await pick();
   last.unshift(current.id);last=last.slice(0,12);
@@ -140,7 +223,7 @@ window.onYouTubeIframeAPIReady=()=>{player=new YT.Player("player",{host:"https:/
 }})};
 $("newBtn").onclick=start;$("nextBtn").onclick=start;$("revealBtn").onclick=()=>{if(!current)return;const t=Math.max(0,player.getCurrentTime?player.getCurrentTime():0);$("cover").classList.add("hidden");$("answer").classList.add("show");$("answerTitle").textContent=current.title;$("answerChannel").textContent="Canal: "+current.channel+" • revelado em "+Math.floor(t/60)+":"+String(Math.floor(t%60)).padStart(2,"0");$("state").textContent="Revelada • letra sincronizada"};
 $("pauseBtn").onclick=()=>{if(!current)return;paused?player.playVideo():player.pauseVideo()};$("restartBtn").onclick=()=>{if(!current)return;player.seekTo(0,true);player.playVideo()};
-$("saveKey").onclick=()=>{const v=$("apiKey").value.trim();if(!v)return toast("Cole uma chave primeiro.");localStorage.setItem("blindKaraokeApiKey",v);$("newBtn").disabled=!ready;$("newBtn").textContent=ready?"🎲 Sortear e tocar":"⏳ Carregando YouTube…";$("state").textContent=ready?"Pronto":"Carregando";toast("Chave salva. Agora cada rodada fará uma nova busca no YouTube.")};
+$("saveKey").onclick=()=>{const v=$("apiKey").value.trim();if(!v)return toast("Cole uma chave primeiro.");localStorage.setItem("blindKaraokeApiKey",v);$("newBtn").disabled=!ready;$("newBtn").textContent=ready?"🎲 Sortear e tocar":"⏳ Carregando YouTube…";$("state").textContent=ready?"Pronto":"Carregando";toast("Chave salva. Agora cada rodada buscará karaokês populares no YouTube.")};
 $("clearKey").onclick=()=>{localStorage.removeItem("blindKaraokeApiKey");$("apiKey").value="";$("newBtn").textContent="🔑 Configure sua API";$("state").textContent="API necessária";toast("Chave removida. O jogo não usará lista fixa.")};$("apiKey").value=key();
 const s=document.createElement("script");s.src="https://www.youtube.com/iframe_api";s.async=true;s.onerror=()=>{$("blindTitle").textContent="Não consegui carregar o YouTube";$("blindSub").textContent="Confira a conexão ou bloqueadores de conteúdo."; $("state").textContent="Player indisponível"};document.head.appendChild(s);
 </script></body></html>
