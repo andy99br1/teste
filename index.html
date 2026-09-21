@@ -33,7 +33,7 @@ details{margin-top:14px;background:#12151dee;border:1px solid var(--line);border
  </section>
  <details>
   <summary>⚙️ Busca aleatória no YouTube</summary>
-  <p>Este modo não usa lista fixa. Cada rodada mistura músicas fáceis, médias e difíceis de vários estilos e décadas. Nas internacionais, o jogo prioriza inglês e só libera outros idiomas na pequena seleção de clássicos globais. Para jogar, salve uma chave da YouTube Data API v3.</p>
+  <p>Este modo não usa lista fixa. Cada rodada mistura músicas fáceis, médias e difíceis, mas sempre tenta ficar dentro de hits, clássicos e músicas com alguma popularidade. Nas internacionais, o jogo prioriza inglês e só libera outros idiomas na pequena seleção de clássicos globais. Para jogar, salve uma chave da YouTube Data API v3.</p>
   <div class="key"><input id="apiKey" type="password" placeholder="Chave da YouTube Data API v3"><button class="btn" id="saveKey">Salvar</button></div>
   <button class="btn" id="clearKey" style="margin-top:8px">Remover chave</button>
   <div class="small">A chave fica apenas neste navegador. Restrinja-a no Google Cloud ao endereço deste GitHub Pages. Ao revelar, a cobertura some e o próprio vídeo de karaokê aparece exatamente no ponto atual, mantendo a letra sincronizada.</div>
@@ -73,15 +73,15 @@ const SEARCHES={
    "karaokê indie brasileiro"
   ],
   hard:[
-   "karaokê sucessos brasileiros nostálgicos",
-   "karaokê clássicos brasileiros menos óbvios",
-   "karaokê MPB clássicos menos conhecidos",
-   "karaokê rock brasileiro clássico",
-   "karaokê samba clássicos antigos",
-   "karaokê soul funk brasileiro clássico",
-   "karaokê hits brasileiros esquecidos anos 80",
-   "karaokê hits brasileiros esquecidos anos 90",
-   "karaokê hits brasileiros esquecidos anos 2000"
+   "karaokê sucessos brasileiros clássicos",
+   "karaokê clássicos brasileiros famosos por geração",
+   "karaokê MPB clássicos anos 60 70 80",
+   "karaokê rock brasileiro clássicos e hits",
+   "karaokê samba grandes clássicos",
+   "karaokê soul funk brasileiro hits clássicos",
+   "karaokê hits brasileiros anos 80",
+   "karaokê hits brasileiros anos 90",
+   "karaokê hits brasileiros anos 2000"
   ]
  },
  intl:{
@@ -114,7 +114,7 @@ const SEARCHES={
    "indie rock classics karaoke",
    "funk soul classics karaoke",
    "motown karaoke classics",
-   "disco deep cuts karaoke",
+   "disco classics karaoke",
    "r&b classics karaoke",
    "country classics karaoke",
    "folk rock karaoke",
@@ -127,21 +127,21 @@ const SEARCHES={
    "punk rock classics karaoke"
   ],
   hard:[
-   "cult classic songs karaoke",
-   "forgotten 70s hits karaoke",
-   "forgotten 80s hits karaoke",
-   "forgotten 90s hits karaoke",
-   "forgotten 2000s hits karaoke",
-   "alternative classics karaoke",
-   "indie classics karaoke",
-   "post punk classics karaoke",
-   "soul deep cuts karaoke",
-   "r&b deep cuts karaoke",
-   "classic country deep cuts karaoke",
-   "rock deep cuts karaoke",
-   "pop deep cuts karaoke english",
-   "disco deep cuts karaoke",
-   "new wave deep cuts karaoke"
+   "classic songs karaoke hits",
+   "70s classic hits karaoke",
+   "80s classic hits karaoke",
+   "90s classic hits karaoke",
+   "2000s classic hits karaoke",
+   "alternative rock classic hits karaoke",
+   "indie rock classic hits karaoke",
+   "post punk well known songs karaoke",
+   "soul classic hits karaoke",
+   "r&b classic hits karaoke",
+   "classic country hits karaoke",
+   "rock classic hits karaoke",
+   "pop classic hits karaoke english",
+   "disco classics karaoke",
+   "new wave classic hits karaoke"
   ],
   globalClassics:[
    "Voyage Voyage karaoke",
@@ -158,7 +158,7 @@ const SEARCHES={
 
 function chooseDifficulty(){
  const r=Math.random();
- return r<0.45?"easy":r<0.85?"medium":"hard";
+ return r<0.55?"easy":r<0.90?"medium":"hard";
 }
 
 function randomSearchQuery(cat){
@@ -181,7 +181,7 @@ function difficultyLabel(d){
 async function fetchPopularity(ids,apiKey){
  if(!ids.length) return {};
  const p=new URLSearchParams({
-  part:"statistics,status,snippet",
+  part:"statistics,status,snippet,contentDetails",
   id:ids.join(","),
   key:apiKey
  });
@@ -195,7 +195,8 @@ async function fetchPopularity(ids,apiKey){
    embeddable:x.status?.embeddable!==false,
    defaultLanguage:(x.snippet?.defaultLanguage||"").toLowerCase(),
    defaultAudioLanguage:(x.snippet?.defaultAudioLanguage||"").toLowerCase(),
-   description:(x.snippet?.description||"")
+   description:(x.snippet?.description||""),
+   duration:(x.contentDetails?.duration||"")
   };
  }
  return map;
@@ -222,6 +223,21 @@ function intlSearchExclusions(){
  return " -tagalog -filipino -pinoy -opm -bisaya -cebuano -videoke -spanish -español -french -français -german -deutsch -italian -italiano -portuguese -português -hindi -tamil -telugu -korean -japanese -thai -vietnamese -indonesian";
 }
 
+function isoDurationSeconds(v){
+ const m=String(v||"").match(/^P(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/);
+ if(!m) return 0;
+ return Number(m[1]||0)*86400+Number(m[2]||0)*3600+Number(m[3]||0)*60+Number(m[4]||0);
+}
+
+function isJunkKaraokeResult(text,durationSeconds){
+ const s=(text||"").toLowerCase();
+ if(/#shorts?|\bshorts?\b|guess the song|guess this song|guess the track|name (all )?these|can you name|quiz|music quiz|song quiz|challenge|medley|mashup|compilation|karaoke compilation|playlist|top \d+|best of|snippet|teaser|preview|reaction|tutorial|lesson/i.test(s)) return true;
+ if(durationSeconds && durationSeconds<105) return true;
+ if(durationSeconds && durationSeconds>720) return true;
+ return false;
+}
+
+
 async function searchYT(cat){
  const apiKey=key();
  if(!apiKey) throw new Error("NO_KEY");
@@ -229,8 +245,8 @@ async function searchYT(cat){
  const search=randomSearchQuery(cat);
  const difficulty=search.difficulty;
  const q=(cat==="intl" && !search.isGlobalClassic)
-  ? search.q + intlSearchExclusions()
-  : search.q;
+  ? search.q + intlSearchExclusions() + " -shorts -short -quiz -guess -challenge -medley -mashup -compilation"
+  : search.q + " -shorts -short -quiz -guess -challenge -medley -mashup -compilation";
  const p=new URLSearchParams({
   part:"snippet",
   type:"video",
@@ -273,9 +289,11 @@ async function searchYT(cat){
    views:stats[x.id]?.views||0,
    defaultLanguage:stats[x.id]?.defaultLanguage||"",
    defaultAudioLanguage:stats[x.id]?.defaultAudioLanguage||"",
-   description:stats[x.id]?.description||""
+   description:stats[x.id]?.description||"",
+   durationSeconds:isoDurationSeconds(stats[x.id]?.duration||"")
   }))
   .filter(x=>stats[x.id]?.embeddable!==false)
+  .filter(x=>!isJunkKaraokeResult(x.title+" "+x.channel+" "+x.description,x.durationSeconds))
   .filter(x=>{
    if(cat!=="intl" || search.isGlobalClassic) return true;
 
@@ -295,19 +313,19 @@ async function searchYT(cat){
  // A dificuldade controla o quão fundo entramos nos resultados populares.
  // "Difícil" ainda precisa ter alguma tração: não queremos karaokês totalmente obscuros.
  const floorByTier=cat==="br"
-  ? {easy:100000,medium:30000,hard:8000}
-  : {easy:500000,medium:100000,hard:25000};
+  ? {easy:250000,medium:75000,hard:25000}
+  : {easy:1000000,medium:250000,hard:75000};
 
  const minViews=floorByTier[difficulty];
  const viable=candidates.filter(x=>x.views>=minViews);
  const base=viable.length>=5?viable:candidates;
 
  let pool;
- if(difficulty==="easy") pool=base.slice(0,10);
- else if(difficulty==="medium") pool=base.slice(4,22);
- else pool=base.slice(10,35);
+ if(difficulty==="easy") pool=base.slice(0,8);
+ else if(difficulty==="medium") pool=base.slice(2,12);
+ else pool=base.slice(4,18);
 
- if(pool.length<3) pool=base.slice(0,Math.min(15,base.length));
+ if(pool.length<3) pool=base.slice(0,Math.min(10,base.length));
  if(!pool.length) throw new Error("NO_RESULTS");
 
  const chosen=rand(pool);
