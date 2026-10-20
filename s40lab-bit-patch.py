@@ -325,9 +325,9 @@ replacement=r'''
                     try{device.handshake();}catch(Exception ignored){}
                 }
                 try {
-                    JSONArray ack=device.setProperty(99,1,"BIT");
+                    Object ack=device.setProperty(99,1,"BIT");
                     report.put("enter_ack_"+entry,safe(ack));
-                    JSONObject first=ack.optJSONObject(0);
+                    JSONObject first=(ack instanceof JSONArray)?((JSONArray)ack).optJSONObject(0):((ack instanceof JSONObject)?(JSONObject)ack:null);
                     if(first==null||first.optInt("code",-1)!=0)
                         throw new IllegalStateException("Entrada BIT não aceita no ciclo "+entry);
                     SystemClock.sleep(10000);
@@ -361,9 +361,9 @@ replacement=r'''
             report.put("list_confirmed",testList);
             if(testList.optInt("Rolling brush testing",-1)!=5)
                 throw new IllegalStateException("Lista BIT não confirma Rolling brush testing = 5. Motor não acionado.");
-            JSONArray startAck=device.setProperty(99,2,5);
+            Object startAck=device.setProperty(99,2,5);
             report.put("test_start_ack",safe(startAck));
-            JSONObject first=startAck.optJSONObject(0);
+            JSONObject first=(startAck instanceof JSONArray)?((JSONArray)startAck).optJSONObject(0):((startAck instanceof JSONObject)?(JSONObject)startAck:null);
             if(first==null||first.optInt("code",-1)!=0)
                 throw new IllegalStateException("Comando 99-2=5 não aceito. Motor não confirmado.");
             report.put("test_command_accepted",true)
