@@ -412,3 +412,259 @@ hs=hs.replace("else if(!r.test_command_sent)toast('Teste não executado; confira
               "else if(!r.test_command_accepted)toast('Teste não executado; confira os detalhes.',true);")
 h.write_text(hs)
 print("S40 Lab v0.7 patch ready: automatic guarded BIT retry, exit-list probe")
+
+
+# --- v0.8: All 11 S40 BIT tests, selectable with one-touch tiles and per-test safeguards
+src=Path("app/src/main/java/br/s40lab/app/S40Bridge.java")
+ss=src.read_text()
+assert 'case "bit-main-brush":answer=bitMainBrush(b);break;' in ss
+ss=ss.replace('case "bit-main-brush":answer=bitMainBrush(b);break;',
+              'case "bit-main-brush":answer=bitMainBrush(b);break;\n                case "bit-any-test":answer=bitAnyTest(b);break;')
+anchor='    /** Run rolling brush only after proof-of-BIT: firmware must list test 5. */'
+assert anchor in ss
+method=r'''
+    private static final String[] BIT_NAMES={
+        "Collision plate testing","Downview testing","Duty box testing",
+        "Edge brush testing","Fan testing","IMU testing","LDS testing",
+        "Pump testing","Rolling brush testing","Wheel testing","*Test all"
+    };
+    private static final int[] BIT_IDS={7,8,15,4,3,13,12,16,5,2,1};
+    private static final int[] BIT_WAIT_SECONDS={65,50,60,45,55,75,40,45,35,50,240};
+
+    /** Each test is selected from a strict whitelist and checked against the live device catalog. */
+    private JSONObject bitAnyTest(JSONObject b)throws Exception{
+        requireDevice();
+        if(demo)throw new IllegalArgumentException("BIT apenas com robô físico conectado.");
+        String name=b.optString("test_name","");
+        int index=-1;
+        for(int i=0;i<BIT_NAMES.length;i++){
+            if(BIT_NAMES[i].equals(name)){index=i;break;}
+        }
+        if(index<0)throw new IllegalArgumentException("Teste BIT desconhecido ou não permitido.");
+        final int id=BIT_IDS[index],seconds=BIT_WAIT_SECONDS[index];
+        final boolean all=id==1;
+        String phrase=all?"TESTAR TODOS":"TESTAR "+id;
+        if(!phrase.equals(b.optString("confirmation"))||!b.optBoolean("safe_location",false))
+            throw new IllegalArgumentException("Marque a segurança e digite "+phrase+".");
+        if(all&&!b.optBoolean("all_tests_acknowledged",false))
+            throw new IllegalArgumentException("O modo todos exige confirmação adicional; as rodas, escovas e bomba podem ser acionadas.");
+        final JSONObject report=ok().put("test_name",name).put("test_id",id)
+            .put("wait_seconds",seconds).put("procedure",
+             "verify live BIT list (max 2 attempts) -> write 99-2/test_id -> wait -> request normal -> check BIT catalog");
+        final JSONArray req=new JSONArray().put(new JSONObject()
+            .put("did",device.deviceId()).put("siid",99).put("piid",5));
+        final JSONArray events=new JSONArray();
+        JSONObject available=null;
+        int entryAttempts=0;
+        boolean commandAccepted=false;
+        try{
+            for(int cycle=1;cycle<=2&&available==null;cycle++){
+                entryAttempts=cycle;
+                if(cycle==2){
+                    try {report.put("reset_before_retry",safe(device.setProperty(99,1,"normal")));}
+                    catch(Exception e){events.put(new JSONObject().put("stage","reset").put("error",String.valueOf(e.getMessage())));}
+                    SystemClock.sleep(2200);
+                    try{device.handshake();}catch(Exception ignored){}
+                }
+                try{
+                    Object ack=device.setProperty(99,1,"BIT");
+                    report.put("enter_ack_"+cycle,safe(ack));
+                    JSONObject first=(ack instanceof JSONArray)?((JSONArray)ack).optJSONObject(0):
+                        ((ack instanceof JSONObject)?(JSONObject)ack:null);
+                    if(first==null||first.optInt("code",-1)!=0)
+                        throw new IllegalStateException("Entrada BIT não aceita.");
+                    SystemClock.sleep(10000);
+                    for(int poll=1;poll<=6;poll++){
+                        try{
+                            if(poll>1)device.handshake();
+                            JSONArray data=device.getProperties(req);
+                            JSONObject item=data.optJSONObject(0);
+                            if(item!=null&&item.optInt("code",-1)==0){
+                                Object raw=item.opt("value");
+                                if(raw instanceof JSONObject)available=(JSONObject)raw;
+                                else if(raw!=null&&!JSONObject.NULL.equals(raw)&&!String.valueOf(raw).trim().isEmpty())
+                                    available=new JSONObject(String.valueOf(raw));
+                                if(available!=null) {
+                                    report.put("catalog_poll",poll);
+                                    break;
+                                }
+                            }
+                            events.put(new JSONObject().put("entry",cycle).put("poll",poll).put("reply",data));
+                        }catch(Exception e){
+                            events.put(new JSONObject().put("entry",cycle).put("poll",poll)
+                                .put("error",e.getMessage()==null?"Falha de rede":e.getMessage()));
+                        }
+                        if(poll<6)SystemClock.sleep(1500);
+                    }
+                }catch(Exception e){
+                    events.put(new JSONObject().put("entry",cycle).put("stage","enter")
+                        .put("error",e.getMessage()==null?"Falha de rede":e.getMessage()));
+                }
+            }
+            if(available==null)
+                throw new IllegalStateException("BIT não confirmado: lista 99-5 vazia. O teste NÃO foi acionado.");
+            report.put("catalog_confirmed",true);
+            final int actualId=available.optInt(name,-1);
+            if(actualId!=id)
+                throw new IllegalStateException("ID do teste no firmware diverge. Esperado "+id+", obtido "+actualId+". Execução bloqueada.");
+            report.put("test_id_verified",true);
+            Object startAck=device.setProperty(99,2,id);
+            report.put("start_ack",safe(startAck));
+            JSONObject first=(startAck instanceof JSONArray)?((JSONArray)startAck).optJSONObject(0):
+                ((startAck instanceof JSONObject)?(JSONObject)startAck:null);
+            if(first==null||first.optInt("code",-1)!=0)
+                throw new IllegalStateException("Comando do teste rejeitado: saída será solicitada.");
+            commandAccepted=true;
+            report.put("test_command_accepted",true);
+            // Some tests require human interaction; the firmware is responsible for pass/fail.
+            SystemClock.sleep(seconds*1000L);
+            report.put("observation_completed",true);
+        }catch(Exception e){
+            report.put("test_error",e.getMessage()==null?"Falha de rede":e.getMessage());
+        }finally{
+            report.put("entry_attempts",entryAttempts).put("events",events);
+            report.put("test_command_accepted",commandAccepted);
+            attemptBitExit(report);
+            if(report.optBoolean("exit_confirmed_by_transport",false)){
+                for(int tries=1;tries<=3;tries++){
+                    try{
+                        SystemClock.sleep(1400);
+                        if(tries>1)device.handshake();
+                        JSONArray check=device.getProperties(req);
+                        JSONObject item=check.optJSONObject(0);
+                        if(item!=null&&item.optInt("code",-1)==0){
+                            Object val=item.opt("value");
+                            boolean empty=val==null||JSONObject.NULL.equals(val)||String.valueOf(val).trim().isEmpty();
+                            report.put("exit_list_empty",empty).put("exit_check_attempt",tries);
+                            if(empty)report.put("exit_evidence","Lista BIT vazia após NORMAL.");
+                            else report.put("exit_evidence","Lista BIT ainda acessível.");
+                            break;
+                        }
+                    }catch(Exception e){
+                        report.put("exit_check_error",e.getMessage()==null?"Sem resposta":e.getMessage());
+                    }
+                }
+            }
+        }
+        return report.put("warning","Nenhum resultado PASS/FAIL é inferido do code 0: observe a fala do robô. Saída não comprovada: reinicie pelo botão físico. Não toque em partes móveis durante testes.");
+    }
+
+'''
+ss=ss.replace(anchor,method+anchor)
+src.write_text(ss)
+grad=Path("app/build.gradle")
+gs=grad.read_text()
+assert "versionCode 7; versionName '0.7.0'" in gs
+grad.write_text(gs.replace("versionCode 7; versionName '0.7.0'","versionCode 8; versionName '0.8.0'"))
+h=Path("app/src/main/assets/index.html")
+hs=h.read_text()
+import json,html
+test_opts=[
+    {"key":"Collision plate testing","id":7,"pt":"Para-choque frontal","info":"Após a mensagem do robô, aperte e solte os lados esquerdo e direito do para-choque, seguindo os avisos de voz. Robô apoiado no chão.","sec":65},
+    {"key":"Downview testing","id":8,"pt":"Sensores de queda","info":"Após a mensagem, erga o robô e coloque-o novamente no chão, conforme a instrução falada. Mantenha-o firme.","sec":50},
+    {"key":"Duty box testing","id":15,"pt":"Reservatório de pó","info":"Após a mensagem, abra a tampa superior, remova o reservatório de pó e recoloque-o. Não toque em partes móveis.","sec":60},
+    {"key":"Edge brush testing","id":4,"pt":"Escova lateral","info":"A escova lateral girará automaticamente. Mantenha fios, cabelos, mãos e objetos afastados.","sec":45},
+    {"key":"Fan testing","id":3,"pt":"Ventilador / sucção","info":"Robô na posição normal sobre o piso. O ventilador passa por três níveis; espere a mensagem de resultado.","sec":55},
+    {"key":"IMU testing","id":13,"pt":"Sensor de orientação (IMU)","info":"Após a fala de início, gire o robô 360 graus no lugar, conforme a instrução técnica. Cuidado com partes móveis.","sec":75},
+    {"key":"LDS testing","id":12,"pt":"Laser / LiDAR","info":"O conjunto de radar gira por aproximadamente 30 segundos. Não toque na torre giratória.","sec":40},
+    {"key":"Pump testing","id":16,"pt":"Bomba de água","info":"Prepare o reservatório de água montado de acordo com o procedimento do fabricante. Ouça se a bomba funciona. Não faça testes repetidos a seco.","sec":45},
+    {"key":"Rolling brush testing","id":5,"pt":"Escova principal","info":"A escova principal pode girar por cerca de 30 segundos. Não a toque ou segure durante o teste.","sec":35},
+    {"key":"Wheel testing","id":2,"pt":"Rodas motrizes","info":"Apoie o robô INVERTIDO, estável, em suportes que não pressionem a torre LiDAR. Rodas livres, dedos afastados.","sec":50},
+    {"key":"*Test all","id":1,"pt":"TODOS os testes (sequência)","info":"ATENÇÃO: sequencia automaticamente testes com instruções incompatíveis de posição, inclusive rodas e escovas. Exige supervisão constante e pode durar vários minutos. Use preferencialmente testes individuais.","sec":240}
+]
+choices='\n'.join(
+    '<button class="btn bit-test-choice" type="button" data-bit-key="'+html.escape(t["key"],quote=True)+'" disabled>'
+    +html.escape(t["pt"])+' · '+str(t["id"])+'</button>' for t in test_opts
+)
+panel='''<div class="card stack section" id="bitAllPanel" style="margin-top:18px">
+<h3>Todos os testes disponíveis no BIT</h3>
+<p class="note">Escolha um teste abaixo. O aplicativo verifica o código na lista do próprio S40 antes de executar. Não executa calibrações.</p>
+<div class="grid" id="bitChoiceGrid">'''+choices+'''</div>
+<div class="notice blue" id="bitSelectedHelp">Selecione um teste para ver a posição correta do robô e o que observar.</div>
+<div><label for="bitChoiceConfirmation">Confirmação específica (mostrada após selecionar)</label>
+<input id="bitChoiceConfirmation" autocomplete="off" placeholder="Selecione um teste"/></div>
+<label class="checkline" id="allTestsExtraRow" style="display:none"><input id="allTestsExtra" type="checkbox" />
+Entendo que executar TODOS pode acionar rodas, escovas e bomba em sequência e exige mudar a posição e interagir sob supervisão.</label>
+<button id="runSelectedBit" class="btn primary block" disabled>Executar teste selecionado</button>
+<pre id="bitSelectedResult" class="output">Nenhum teste executado.</pre>
+<p class="note">Durante os testes, siga os avisos de voz. Não toque nos motores em funcionamento. Se o robô não sair do BIT, use o botão físico para reiniciar.</p>
+</div>'''
+needle='<div style="margin-top:16px"><button id="bitExit"'
+assert needle in hs
+hs=hs.replace(needle,panel+'\n'+needle)
+assert "'runTestBtn','bitScan','bitExit','brushBitRun']" in hs
+hs=hs.replace("'runTestBtn','bitScan','bitExit','brushBitRun']",
+              "'runTestBtn','bitScan','bitExit','brushBitRun','runSelectedBit']")
+assert "document.querySelectorAll('.act, .setting button')" in hs
+hs=hs.replace("document.querySelectorAll('.act, .setting button')",
+              "document.querySelectorAll('.act, .setting button, .bit-test-choice')")
+init_needle="$('brushBitRun').onclick=runBrushBit;"
+assert init_needle in hs
+hs=hs.replace(init_needle,init_needle+"setupBitTestCatalog();")
+jsconf=json.dumps(test_opts,ensure_ascii=False)
+js=r'''
+const bitTestSpecs=BIT_SPECS_HERE;
+let bitSelected=null;
+function setupBitTestCatalog(){
+ document.querySelectorAll('.bit-test-choice').forEach(btn=>{
+   btn.onclick=()=>{
+     if(busy)return;
+     let spec=bitTestSpecs.find(t=>t.key===btn.dataset.bitKey);
+     if(!spec)return;
+     bitSelected=spec;
+     document.querySelectorAll('.bit-test-choice').forEach(el=>{
+       el.style.borderColor=el===btn?'#ffa45c':'';
+       el.style.background=el===btn?'#493527':'';
+     });
+     const phrase=spec.id===1?'TESTAR TODOS':'TESTAR '+spec.id;
+     $('bitSelectedHelp').textContent=spec.pt+' (ID '+spec.id+'): '+spec.info+' Duração máxima de observação: '+spec.sec+' segundos. Confirme digitando '+phrase+'.';
+     $('bitChoiceConfirmation').placeholder=phrase;
+     $('bitChoiceConfirmation').value='';
+     $('allTestsExtraRow').style.display=spec.id===1?'flex':'none';
+     $('allTestsExtra').checked=false;
+   };
+ });
+}
+async function runSelectedBit(){
+ if(!con||busy||!bitSelected){toast('Escolha um teste antes.',true);return;}
+ let id=bitSelected.id;
+ let phrase=id===1?'TESTAR TODOS':'TESTAR '+id;
+ if($('bitChoiceConfirmation').value.trim()!==phrase){
+   toast('Digite '+phrase+' exatamente para confirmar.',true);return;
+ }
+ if(!$('bitSafety').checked){toast('Marque a confirmação de segurança no início da aba BIT.',true);return;}
+ if(id===1&&!$('allTestsExtra').checked){
+   toast('Confirme também o risco de executar todos os testes.',true);return;
+ }
+ if(!window.confirm('Executar '+bitSelected.pt+'? Siga a posição e as instruções indicadas.')){
+   return;
+ }
+ setBusy(true);
+ $('bitSelectedResult').textContent='Executando '+bitSelected.pt+'. Aguarde o teste e a solicitação de saída do BIT; ouça os anúncios do robô.';
+ try{
+   const r=await api('bit-any-test',{
+      test_name:bitSelected.key,
+      confirmation:phrase,
+      safe_location:$('bitSafety').checked,
+      all_tests_acknowledged:$('allTestsExtra').checked
+   });
+   $('bitSelectedResult').textContent=jsonText(r);
+   if(!r.exit_confirmed_by_transport||r.exit_list_empty===false)
+      toast('Saída BIT não verificada. Reinicie pelo botão físico se necessário.',true);
+   else if(!r.test_command_accepted)
+      toast('Teste NÃO foi iniciado. Confira o resultado.',true);
+   else
+      toast('Teste enviado. Informe se o robô disse Test passed ou Test failed.');
+ }catch(e){
+   $('bitSelectedResult').textContent=e.message;
+   toast('Erro do teste: '+e.message,true);
+ }finally{setBusy(false)}
+}
+'''.replace('BIT_SPECS_HERE',jsconf)
+needlejs='async function runBitExit(){'
+assert needlejs in hs
+hs=hs.replace(needlejs,js+'\n'+needlejs)
+hs=hs.replace("setupBitTestCatalog();","setupBitTestCatalog();$('runSelectedBit').onclick=runSelectedBit;")
+hs=hs.replace("S40 Lab v0.2 · Interface experimental", "S40 Lab v0.8 · Interface experimental")
+h.write_text(hs)
+print("S40 Lab v0.8 patch: 11 BIT entries, live ID verification, required per-test instructions, guarded execution")
