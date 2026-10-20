@@ -1144,3 +1144,224 @@ grad=Path('app/build.gradle');gs=grad.read_text()
 assert "versionCode 9; versionName '0.9.0'" in gs
 grad.write_text(gs.replace("versionCode 9; versionName '0.9.0'","versionCode 10; versionName '1.0.0'"))
 print("v1.0: requestAsync background worker + responsive WebView + live timer")
+
+
+# --- v1.1: Finish on voice pass/fail, no fixed test waits, no typing TESTAR X
+bridge=Path("app/src/main/java/br/s40lab/app/S40Bridge.java")
+s=bridge.read_text()
+assert 'private boolean manualBitSession=false;' in s
+s=s.replace('private boolean manualBitSession=false;',
+'''private boolean manualBitSession=false;
+    private int manualBitPendingId=-1;
+    private String manualBitPendingName="";''')
+needle='                case "bit-session-test":answer=bitSessionTest(b);break;'
+assert needle in s
+s=s.replace(needle,needle+'\n                case "bit-session-finish":answer=bitSessionFinish(b);break;')
+s=s.replace('case "connect":manualBitSession=false;answer=connect(b);break;',
+            'case "connect":manualBitSession=false;manualBitPendingId=-1;answer=connect(b);break;')
+s=s.replace('case "disconnect":manualBitSession=false;device=null;demo=false;ip=null;',
+            'case "disconnect":manualBitSession=false;manualBitPendingId=-1;device=null;demo=false;ip=null;')
+# In session start existing valid BIT still doesn't start a test; stale pending cleared only on re-enter verified BIT.
+needle='        JSONObject report=ok().put("procedure","enter BIT once, verify 99-5, keep session active");'
+assert needle in s
+s=s.replace(needle,needle+'\n        manualBitPendingId=-1;manualBitPendingName="";')
+needle='        JSONObject report=ok();\n        try{\n            JSONObject catalogNow=liveBitCatalog();'
+assert needle in s
+s=s.replace(needle,'        JSONObject report=ok().put("pending_test_id",manualBitPendingId).put("pending_test_name",manualBitPendingName);\n        try{\n            JSONObject catalogNow=liveBitCatalog();')
+needle='        if(!manualBitSession)throw new IllegalStateException("Sessão BIT não confirmada. Entre no BIT ou use Verificar estado.");'
+assert needle in s
+s=s.replace(needle,needle+'''
+        if(manualBitPendingId>=0)
+            throw new IllegalStateException("Confirme o resultado do teste anterior antes de iniciar outro.");''')
+needle='        if(!b.optBoolean("safe_location",false)||\n            !("TESTAR "+id).equals(b.optString("confirmation")))\n            throw new IllegalArgumentException("Confirme posição segura e digite TESTAR "+id+".");'
+assert needle in s
+s=s.replace(needle,
+'''        if(!b.optBoolean("safe_location",false)||!b.optBoolean("confirmed",false))
+            throw new IllegalArgumentException("Confirme a posição segura e a execução do teste.");''')
+needle='        report.put("test_command_accepted",accepted);\n        if(accepted)SystemClock.sleep(wait*1000L);'
+assert needle in s
+s=s.replace(needle,
+'''        report.put("test_command_accepted",accepted);
+        if(accepted){
+            manualBitPendingId=id;
+            manualBitPendingName=name;
+        }
+        report.put("awaiting_user_result",accepted)
+              .put("note","Comando enviado imediatamente. Espere a fala de PASS/FAIL e confirme no aplicativo; não há espera fixa.");''')
+anchor='    /** Explicitly leave BIT. Distinguish transport ack from proof by catalog. */'
+assert anchor in s
+method=r'''
+    /** Manual acknowledgment from the operator, not an automatic diagnosis from firmware. */
+    private JSONObject bitSessionFinish(JSONObject b)throws Exception{
+        String result=b.optString("result","");
+        if(!("passed".equals(result)||"failed".equals(result)||"unknown".equals(result)))
+            throw new IllegalArgumentException("Resultado inválido.");
+        if(manualBitPendingId<0)
+            throw new IllegalStateException("Nenhum teste iniciado está aguardando confirmação.");
+        JSONObject report=ok()
+            .put("test_id",manualBitPendingId)
+            .put("test_name",manualBitPendingName)
+            .put("manual_result",result)
+            .put("manual_result_only",true)
+            .put("bit_remains_active",manualBitSession)
+            .put("note","Resultado registrado pelo usuário após ouvir/observar o robô. Não é validação automática do firmware.");
+        manualBitPendingId=-1;manualBitPendingName="";
+        return report;
+    }
+
+'''
+s=s.replace(anchor,method+anchor)
+needle='        manualBitSession=false;\n        report.put("exit_verified_by_empty_catalog",verified).put("exit_checks",events)'
+assert needle in s
+s=s.replace(needle,
+'''        manualBitSession=false;
+        manualBitPendingId=-1;manualBitPendingName="";
+        report.put("exit_verified_by_empty_catalog",verified).put("exit_checks",events)''')
+bridge.write_text(s)
+grad=Path('app/build.gradle'); gs=grad.read_text()
+assert "versionCode 10; versionName '1.0.0'" in gs
+grad.write_text(gs.replace("versionCode 10; versionName '1.0.0'","versionCode 11; versionName '1.1.0'"))
+h=Path("app/src/main/assets/index.html")
+html=h.read_text()
+import re
+# Remove all manual phrase entry controls from session UI.
+html,count=re.subn(
+    r'<div><label for="bitStartConfirm">.*?</div>',
+    '',html,count=1,flags=re.S)
+assert count==1
+html,count=re.subn(
+    r'<div><label for="bitChoiceConfirmation">.*?</div>',
+    '',html,count=1,flags=re.S)
+assert count==1
+html,count=re.subn(
+    r'<label class="checkline" id="allTestsExtraRow".*?</label>',
+    '',html,count=1,flags=re.S)
+assert count==1
+# Remove redundant execute button, test tiles themselves will open a native confirmation dialog.
+html,count=re.subn(
+    r'<button id="runSelectedBit".*?</button>',
+    '',html,count=1,flags=re.S)
+assert count==1
+# Insert visible post-test manual action buttons.
+needle='<pre id="bitSelectedResult" class="output">Nenhum teste executado.</pre>'
+assert needle in html
+html=html.replace(needle,needle+'''
+<div id="bitOutcomePanel" class="card stack" style="display:none;margin-top:12px">
+<h3>O teste terminou?</h3>
+<p id="bitOutcomeMessage">Quando o robô anunciar o resultado, toque no botão correspondente para liberar o próximo teste.</p>
+<div class="row" style="gap:10px;flex-wrap:wrap">
+  <button id="bitOutcomePass" class="btn primary" type="button">✓ Passou — liberar</button>
+  <button id="bitOutcomeFail" class="btn danger" type="button">✗ Falhou — liberar</button>
+  <button id="bitOutcomeUnknown" class="btn" type="button">Não concluiu / não ouvi</button>
+</div>
+<p class="note">Só confirme após o robô encerrar o teste e parar seus componentes. A confirmação é manual, não altera o resultado do firmware nem sai do BIT.</p>
+</div>''')
+# No need for old data form references in setupBitTestCatalog.
+start=html.index('function setupBitTestCatalog(){')
+end=html.index('async function runSelectedBit(){',start)
+replacement=r'''
+function setupBitTestCatalog(){
+ document.querySelectorAll('.bit-test-choice').forEach(btn=>{
+  btn.onclick=()=>{
+   if(busy||bitTestPending){toast('Aguarde e confirme o resultado do teste anterior.',true);return;}
+   const spec=bitTestSpecs.find(t=>t.key===btn.dataset.bitKey);
+   if(!spec)return;
+   bitSelected=spec;
+   $('bitSelectedHelp').textContent=spec.pt+' (ID '+spec.id+'): '+spec.info;
+   runSelectedBit();
+  };
+ });
+}
+'''
+html=html[:start]+replacement+html[end:]
+# Wrap all normal BIT commands against a test awaiting completion.
+needle="let bitSessionUiActive=false;"
+assert needle in html
+html=html.replace(needle,"let bitTestPending=false;\nlet bitPendingSpec=null;\n"+needle)
+# Simplify entry: checkbox and confirm prompt are enough, no phrase typing.
+needle="if(!$('bitSafety').checked||$('bitStartConfirm').value.trim()!=='ENTRAR BIT'){"
+assert needle in html
+html=html.replace(needle,"if(!$('bitSafety').checked){")
+html=html.replace("toast('Confirme o local seguro e digite ENTRAR BIT.',true);",
+                  "toast('Confirme que o robô está em local seguro.',true);")
+# If there is still a running test, don't leave without explicit note.
+needle="if(!window.confirm('Enviar NORMAL e encerrar a sessão BIT? Certifique-se de que nenhum teste ainda está girando.'))return;"
+assert needle in html
+html=html.replace(needle,
+"""if(bitTestPending){toast('Aguarde o teste acabar e confirme seu resultado antes de sair.',true);return;}
+ if(!window.confirm('Enviar NORMAL e encerrar a sessão BIT? Certifique-se de que nenhum teste ainda está girando.'))return;""")
+# Replace runSelectedBit completely with confirmation-only flow (native ACK ends quickly, no timer).
+start=html.index('async function runSelectedBit(){')
+end=html.index('async function refreshLogs(){',start)
+ui=r'''
+function setBitAwaitingOutcome(active,spec){
+ bitTestPending=active;
+ bitPendingSpec=active?spec:null;
+ $('bitOutcomePanel').style.display=active?'block':'none';
+ if(active)$('bitOutcomeMessage').textContent='Teste: '+spec.pt+'. Aguarde a fala de PASS/FAIL do robô. Assim que terminar, selecione o resultado para liberar os próximos testes.';
+ // Maintain visual and logical one-test-at-a-time gating.
+ document.querySelectorAll('.bit-test-choice').forEach(btn=>btn.disabled=active||busy||!con);
+}
+async function finishBitTest(result){
+ if(!bitTestPending||busy)return;
+ if(result==='unknown'&&!window.confirm('O robô encerrou o teste e seus componentes pararam? Se estiver girando, não confirme.'))return;
+ setBusy(true);
+ try {
+  const r=await api('bit-session-finish',{result});
+  $('bitSelectedResult').textContent=jsonText(r);
+  setBitAwaitingOutcome(false,null);
+  toast(result==='passed'?'Resultado anotado: PASSOU. Pode escolher outro teste.':
+       result==='failed'?'Resultado anotado: FALHOU. Pode escolher outro teste.':
+       'Resultado inconclusivo anotado. Pode escolher outro teste.',result!=='passed');
+ }catch(e){$('bitSelectedResult').textContent=e.message;toast('Não foi possível liberar: '+e.message,true);}
+ finally{setBusy(false);document.querySelectorAll('.bit-test-choice').forEach(btn=>btn.disabled=bitTestPending||busy||!con);}
+}
+async function runSelectedBit(){
+ if(!con||busy||!bitSelected)return;
+ if(bitTestPending){toast('Finalize o teste anterior usando Passou ou Falhou.',true);return;}
+ if(!bitSessionUiActive){toast('Entre no BIT e confirme a lista antes de executar.',true);return;}
+ const spec=bitSelected;
+ if(spec.id===1){toast('Selecione testes individuais.',true);return;}
+ if(!$('bitSafety').checked){toast('Confirme o ambiente seguro.',true);return;}
+ if(!window.confirm('Executar '+spec.pt+' (ID '+spec.id+')?\\n\\n'+spec.info+'\\n\\nO modo BIT continuará ativo.'))return;
+ setBusy(true);
+ $('bitSelectedResult').textContent='Enviando comando para '+spec.pt+'...';
+ try{
+  const r=await api('bit-session-test',{
+    test_name:spec.key,
+    safe_location:true,
+    confirmed:true
+  });
+  $('bitSelectedResult').textContent=jsonText(r);
+  if(r.test_command_accepted){
+    setBitAwaitingOutcome(true,spec);
+    toast('Comando aceito. Após a fala do S40, marque Passou ou Falhou para liberar.');
+  }else{
+    if((r.test_error||'').includes('vazia'))showSessionState(false);
+    toast('Teste não iniciado. Confira o resultado.',true);
+  }
+ }catch(e){
+  $('bitSelectedResult').textContent=e.message;
+  showSessionState(null);
+  toast('Falha ao iniciar: '+e.message,true);
+ }
+ finally{
+  setBusy(false);
+  document.querySelectorAll('.bit-test-choice').forEach(btn=>btn.disabled=bitTestPending||busy||!con);
+ }
+}
+'''
+html=html[:start]+ui+html[end:]
+# Wire all post-test action buttons; JS uses explicit click events.
+anchor="$('bitExit').onclick=exitManualBit;setupBitTestCatalog();$('runSelectedBit').onclick=runSelectedBit;"
+assert anchor in html
+html=html.replace(anchor,
+"""$('bitExit').onclick=exitManualBit;setupBitTestCatalog();$('bitOutcomePass').onclick=()=>finishBitTest('passed');$('bitOutcomeFail').onclick=()=>finishBitTest('failed');$('bitOutcomeUnknown').onclick=()=>finishBitTest('unknown');""")
+# Update all disabled elements list; old runSelectedBit no longer exists.
+html=html.replace("'bitSessionStart','bitSessionStatus','bitExit','runSelectedBit'",
+                  "'bitSessionStart','bitSessionStatus','bitExit','bitOutcomePass','bitOutcomeFail','bitOutcomeUnknown'")
+# Eliminate old hidden input refs and rename UI to match current feature.
+html=html.replace('Para entrar digite ENTRAR BIT','Entrar no BIT com confirmação')
+html=html.replace('S40 Lab v1.0 · BIT fluido','S40 Lab v1.1 · BIT sem espera')
+h.write_text(html)
+print("v1.1 patch: immediate test ACK, pass/fail buttons, test tile confirm, no typed phrases")
