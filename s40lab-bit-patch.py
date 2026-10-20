@@ -1933,3 +1933,92 @@ new,count=re.subn(r"versionCode\s+\d+;\s+versionName\s+'[^']+'", "versionCode 14
 assert count==1, "Expected exactly one version declaration"
 g.write_text(new)
 print("v1.4: bounded, read-only property scans for 99-3 through 99-10")
+
+
+# v1.5: Copy full JSON via Android clipboard (works in file:// WebView).
+b=Path("app/src/main/java/br/s40lab/app/S40Bridge.java")
+s=b.read_text()
+anchor="import android.content.res.AssetManager;"
+assert anchor in s
+s=s.replace(anchor,anchor+"""
+import android.content.Context;
+import android.content.ClipboardManager;
+import android.content.ClipData;""",1)
+anchor="    private final JSONObject catalog;"
+assert anchor in s
+s=s.replace(anchor,"    private final Context androidContext;\n"+anchor,1)
+anchor="    public S40Bridge(AssetManager assets){"
+assert anchor in s
+s=s.replace(anchor,"    public S40Bridge(AssetManager assets, Context context){\n        androidContext=context.getApplicationContext();",1)
+anchor="    @JavascriptInterface\n    public synchronized String request(String raw){"
+assert anchor in s
+s=s.replace(anchor,'''    @JavascriptInterface
+    public boolean copyText(String text){
+        if(text==null||text.length()==0)return false;
+        try{
+            ClipboardManager cb=(ClipboardManager)androidContext.getSystemService(Context.CLIPBOARD_SERVICE);
+            if(cb==null)return false;
+            cb.setPrimaryClip(ClipData.newPlainText("S40 Lab JSON",text));
+            return true;
+        }catch(Exception e){return false;}
+    }
+'''+anchor,1)
+b.write_text(s)
+
+activity=Path("app/src/main/java/br/s40lab/app/MainActivity.java")
+a=activity.read_text()
+anchor='new S40Bridge(getAssets())'
+assert anchor in a
+activity.write_text(a.replace(anchor,'new S40Bridge(getAssets(),this)',1))
+
+page=Path("app/src/main/assets/index.html")
+h=page.read_text()
+anchor="init().catch(e=>toast('Falha ao iniciar a interface: '+e.message,true));"
+assert anchor in h
+copyjs=r'''
+function installCopyJsonButtons(){
+ document.querySelectorAll('pre.output[id]').forEach(pre=>{
+  if(pre.id==='bitMonitorTimeline')return; // already has a full-history copy control.
+  if(pre.nextElementSibling && pre.nextElementSibling.dataset && pre.nextElementSibling.dataset.copyJsonFor===pre.id)return;
+  const button=document.createElement('button');
+  button.type='button';
+  button.className='btn';
+  button.dataset.copyJsonFor=pre.id;
+  button.textContent='Copiar JSON inteiro';
+  button.style.marginTop='8px';
+  button.addEventListener('click',()=>{
+    const raw=pre.textContent||'';
+    try{
+      JSON.parse(raw);
+    }catch(err){
+      toast('Este campo ainda não contém um JSON completo para copiar.',true);
+      return;
+    }
+    try{
+      if(window.S40Android && typeof S40Android.copyText==='function' && S40Android.copyText(raw)){
+        toast('JSON completo copiado. Revise identificadores antes de compartilhar.');
+        return;
+      }
+      const temp=document.createElement('textarea');
+      temp.value=raw;temp.style.position='fixed';temp.style.left='-9999px';
+      document.body.appendChild(temp);temp.focus();temp.select();
+      const success=document.execCommand('copy');temp.remove();
+      if(success){toast('JSON completo copiado. Revise identificadores antes de compartilhar.');return;}
+    }catch(err){}
+    toast('Falha ao copiar. Tente novamente.',true);
+  });
+  pre.insertAdjacentElement('afterend',button);
+ });
+}
+installCopyJsonButtons();
+'''
+h=h.replace(anchor,copyjs+'\n'+anchor,1)
+h=h.replace('S40 Lab v1.4 · Investigação MIoT','S40 Lab v1.5 · Copiar JSON completo')
+page.write_text(h)
+g=Path("app/build.gradle")
+src=g.read_text()
+import re
+new,count=re.subn(r"versionCode\s+\d+;\s+versionName\s+'[^']+'", "versionCode 15; versionName '1.5.0'",src)
+assert count==1
+g.write_text(new)
+print("v1.5: Android native clipboard; full JSON copy beside diagnostic output, scan, BIT.")
