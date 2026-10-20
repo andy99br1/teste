@@ -1566,3 +1566,283 @@ s=s.replace("Object raw=device.action(99,1,new JSONArray());",
             "Object raw=device.actionWithDeviceId(99,1,new JSONArray());")
 bridge.write_text(s)
 print("Using real miIO DID for BIT report action; no repeated write commands")
+
+
+# --- v1.3: Time-series fault telemetry during each manual BIT test
+bridge=Path("app/src/main/java/br/s40lab/app/S40Bridge.java")
+s=bridge.read_text()
+anchor='    private String manualBitPendingName="";'
+assert anchor in s
+s=s.replace(anchor,anchor+'''
+    private JSONArray bitMonitorSamples=new JSONArray();
+    private JSONArray bitMonitorChanges=new JSONArray();
+    private JSONObject bitMonitorPrevious=null;
+    private JSONObject bitMonitorLastReport=null;
+    private long bitMonitorStartedMs=0;
+    private String bitMonitorTest="";
+    private int bitMonitorTestId=-1;
+    private boolean bitMonitorActive=false;''')
+needle='                case "bit-session-finish":answer=bitSessionFinish(b);break;'
+assert needle in s
+s=s.replace(needle,needle+'''
+                case "bit-monitor-poll":answer=bitMonitorPoll(b);break;
+                case "bit-monitor-last":answer=bitMonitorLast(b);break;''')
+anchor='    /** Manual acknowledgment from the operator, not an automatic diagnosis from firmware. */'
+assert anchor in s
+methods=r'''
+    private static final int[] BIT_FAULT_PIIDS={3,66,67,72};
+
+    /** Begin before motor command, so the first sample is a genuine baseline. */
+    private void beginBitMonitor(String name,int id){
+        bitMonitorSamples=new JSONArray();
+        bitMonitorChanges=new JSONArray();
+        bitMonitorPrevious=null;
+        bitMonitorTest=name;
+        bitMonitorTestId=id;
+        bitMonitorStartedMs=System.currentTimeMillis();
+        bitMonitorActive=true;
+        bitMonitorCapture("before_command");
+    }
+    /** A single batch read. The call is queued on the same I/O executor as motor commands. */
+    private JSONObject bitMonitorCapture(String reason){
+        JSONObject row=new JSONObject();
+        try{
+            row.put("elapsed_ms",Math.max(0,System.currentTimeMillis()-bitMonitorStartedMs))
+               .put("timestamp_ms",System.currentTimeMillis())
+               .put("reason",reason);
+            JSONArray req=new JSONArray();
+            String did=device.deviceId();
+            for(int piid:BIT_FAULT_PIIDS)req.put(new JSONObject()
+                .put("did",did).put("siid",2).put("piid",piid));
+            JSONObject current=new JSONObject();
+            JSONArray raw=device.getProperties(req);
+            for(int piid:BIT_FAULT_PIIDS){
+                JSONObject item=null;
+                for(int i=0;i<raw.length();i++){
+                    JSONObject v=raw.optJSONObject(i);
+                    if(v!=null&&v.optInt("siid",-1)==2&&v.optInt("piid",-1)==piid){
+                        item=v;break;
+                    }
+                }
+                JSONObject value=new JSONObject();
+                if(item==null)value.put("error","Propriedade ausente na resposta");
+                else{
+                    int code=item.optInt("code",-1);
+                    value.put("code",code);
+                    value.put("value",code==0?
+                        (item.opt("value")==null?JSONObject.NULL:item.opt("value")):
+                        JSONObject.NULL);
+                }
+                current.put("2-"+piid,value);
+            }
+            row.put("readings",current);
+            if(bitMonitorPrevious!=null){
+                for(int piid:BIT_FAULT_PIIDS){
+                    String key="2-"+piid;
+                    Object before=bitMonitorPrevious.opt(key);
+                    Object after=current.opt(key);
+                    if(before==null||!String.valueOf(before).equals(String.valueOf(after))){
+                        if(bitMonitorChanges.length()<180)bitMonitorChanges.put(new JSONObject()
+                            .put("elapsed_ms",row.optLong("elapsed_ms"))
+                            .put("property",key)
+                            .put("before",before==null?JSONObject.NULL:before)
+                            .put("after",after==null?JSONObject.NULL:after));
+                    }
+                }
+            }
+            bitMonitorPrevious=current;
+        }catch(Exception e){
+            try{row.put("read_error",e.getMessage()==null?"Timeout":e.getMessage());}
+            catch(Exception ignored){}
+        }
+        if(bitMonitorSamples.length()<180)bitMonitorSamples.put(row);
+        return row;
+    }
+    private JSONObject bitMonitorPoll(JSONObject b)throws Exception{
+        if(!bitMonitorActive||manualBitPendingId<0)
+            return ok().put("monitor_active",false).put("samples",bitMonitorSamples.length())
+                .put("changes",bitMonitorChanges.length());
+        if(bitMonitorSamples.length()<180)bitMonitorCapture("during_test");
+        return ok().put("monitor_active",bitMonitorActive)
+            .put("test_id",bitMonitorTestId)
+            .put("samples",bitMonitorSamples.length())
+            .put("changes",bitMonitorChanges.length())
+            .put("elapsed_ms",Math.max(0,System.currentTimeMillis()-bitMonitorStartedMs))
+            .put("latest",bitMonitorSamples.optJSONObject(bitMonitorSamples.length()-1))
+            .put("limit_reached",bitMonitorSamples.length()>=180);
+    }
+    private JSONObject bitMonitorLast(JSONObject b)throws Exception{
+        return ok().put("available",bitMonitorLastReport!=null)
+            .put("report",bitMonitorLastReport==null?JSONObject.NULL:bitMonitorLastReport);
+    }
+    private JSONObject bitMonitorFinish(String manualResult)throws Exception{
+        bitMonitorActive=false;
+        if(bitMonitorStartedMs==0)
+            return new JSONObject().put("warning","Nenhuma captura foi iniciada.");
+        bitMonitorCapture("after_user_result");
+        JSONObject result=new JSONObject()
+            .put("test_name",bitMonitorTest).put("test_id",bitMonitorTestId)
+            .put("manual_result",manualResult)
+            .put("sample_count",bitMonitorSamples.length())
+            .put("change_count",bitMonitorChanges.length())
+            .put("started_at_ms",bitMonitorStartedMs)
+            .put("ended_at_ms",System.currentTimeMillis())
+            .put("interval_target_ms",1000)
+            .put("interval_note","Amostragem depende da latência MIoT e da atividade da interface; horários reais em elapsed_ms.")
+            .put("properties","2-3,2-66,2-67,2-72")
+            .put("changes",bitMonitorChanges)
+            .put("samples",bitMonitorSamples)
+            .put("result_source","Confirmação manual; os valores MIoT não atestam PASS/FAIL.");
+        bitMonitorLastReport=result;
+        return result;
+    }
+
+'''
+s=s.replace(anchor,methods+anchor)
+# Baseline before sending command, after live check of BIT catalog.
+needle='        report.put("catalog_confirmed",true);\n        Object ack=device.setProperty(99,2,id);'
+assert needle in s
+s=s.replace(needle,
+'''        report.put("catalog_confirmed",true);
+        beginBitMonitor(name,id);
+        report.put("monitor_baseline_sampled",bitMonitorSamples.length()>0)
+              .put("monitor_period_ms_target",1000);
+        Object ack=device.setProperty(99,2,id);''')
+needle='        report.put("test_command_accepted",accepted);\n        if(accepted){'
+assert needle in s
+s=s.replace(needle,
+'''        report.put("test_command_accepted",accepted);
+        if(!accepted){
+            bitMonitorActive=false;
+            bitMonitorLastReport=bitMonitorFinish("command_not_accepted");
+        }
+        if(accepted){''')
+needle='        JSONObject report=ok()\n            .put("test_id",manualBitPendingId)'
+assert needle in s
+s=s.replace(needle,
+'''        JSONObject captured=bitMonitorFinish(result);
+        JSONObject report=ok()
+            .put("capture",captured)
+            .put("test_id",manualBitPendingId)''')
+# The UI may lose connection before finishing; stop flags on deliberate exit/connect/disconnect
+needle='        manualBitSession=false;\n        manualBitPendingId=-1;manualBitPendingName="";\n        report.put("exit_verified_by_empty_catalog"'
+assert needle in s
+s=s.replace(needle,
+'''        bitMonitorActive=false;
+        manualBitSession=false;
+        manualBitPendingId=-1;manualBitPendingName="";
+        report.put("exit_verified_by_empty_catalog"''')
+needle='    private JSONObject bitSessionStart(JSONObject b)throws Exception{'
+assert needle in s
+s=s.replace(needle,needle+'''
+        bitMonitorActive=false;''')
+bridge.write_text(s)
+grad=Path("app/build.gradle")
+g=grad.read_text()
+assert "versionCode 12; versionName '1.2.0'" in g
+grad.write_text(g.replace("versionCode 12; versionName '1.2.0'",
+                          "versionCode 13; versionName '1.3.0'"))
+page=Path("app/src/main/assets/index.html")
+h=page.read_text()
+anchor='<pre id="bitSelectedResult" class="output">Nenhum teste executado.</pre>'
+assert anchor in h
+h=h.replace(anchor,anchor+'''
+<div class="card stack" id="bitMonitorPanel" style="margin-top:12px">
+<h3>Captura automática dos erros</h3>
+<p class="note">A captura começa antes do comando e continua até você confirmar o resultado. Não existe um cronômetro fixo para liberar o teste.</p>
+<div id="bitMonitorStatus" class="notice blue">Aguardando iniciar um teste BIT.</div>
+<button id="bitMonitorCopy" type="button" class="btn" disabled>Copiar histórico completo</button>
+<pre id="bitMonitorTimeline" class="output">Os registros aparecerão aqui após o teste.</pre>
+</div>''')
+# Add copy button to global enabled/disabled management
+needle="'bitReadDiagnostics','bitFetchReport'"
+assert needle in h
+h=h.replace(needle,"'bitReadDiagnostics','bitFetchReport','bitMonitorCopy'")
+anchor='let bitTestPending=false;'
+assert anchor in h
+h=h.replace(anchor,"""let bitMonitorSequence=0;
+let bitMonitorJson='';
+let bitMonitorLatest=null;
+let bitMonitorPollBusy=false;
+"""+anchor)
+# Schedule a self-throttling recurring poll, not concurrent polling operations:
+anchor='async function finishBitTest(result){'
+assert anchor in h
+functions=r'''
+async function startBitMonitoring(){
+ const sequence=++bitMonitorSequence;
+ $('bitMonitorStatus').textContent='Leitura inicial registrada; capturando códigos durante o teste...';
+ $('bitMonitorTimeline').textContent='Aguardando leituras...';
+ $('bitMonitorCopy').disabled=true;
+ bitMonitorJson='';
+ async function loop(){
+  if(sequence!==bitMonitorSequence||!bitTestPending||!con)return;
+  try{
+   bitMonitorPollBusy=true;
+   const r=await api('bit-monitor-poll',{});
+   if(sequence!==bitMonitorSequence||!bitTestPending)return;
+   bitMonitorLatest=r;
+   $('bitMonitorStatus').textContent='Monitorando: '+(r.samples||0)+' leituras | '+(r.changes||0)+' alterações | '+Math.round((r.elapsed_ms||0)/1000)+'s';
+   if(r.limit_reached){
+    $('bitMonitorStatus').textContent+=' — limite de 180 amostras atingido; finalize o teste normalmente.';
+   }
+  }catch(e){
+   if(sequence===bitMonitorSequence)$('bitMonitorStatus').textContent='Falha em uma leitura. Nova tentativa enquanto o teste continuar: '+e.message;
+  }finally{
+   bitMonitorPollBusy=false;
+   if(sequence===bitMonitorSequence&&bitTestPending)setTimeout(loop,1000);
+  }
+ }
+ setTimeout(loop,1000);
+}
+function showBitCapture(report){
+ if(!report){
+  $('bitMonitorStatus').textContent='Nenhum histórico retornado.';
+  return;
+ }
+ bitMonitorJson=JSON.stringify(report,null,2);
+ $('bitMonitorTimeline').textContent=bitMonitorJson;
+ $('bitMonitorCopy').disabled=false;
+ const changes=report.changes||[];
+ const interesting=changes.map(e=>e.property+': '+JSON.stringify(e.after)).slice(0,6);
+ $('bitMonitorStatus').textContent='Captura concluída: '+(report.sample_count||0)+' leituras, '+(report.change_count||0)+' alterações'+
+    (interesting.length?'. Mudanças: '+interesting.join(' / '):'. Nenhuma mudança detectada.');
+}
+async function copyBitMonitor(){
+ if(!bitMonitorJson){toast('Nenhum histórico disponível.',true);return;}
+ try{
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+   await navigator.clipboard.writeText(bitMonitorJson);
+  }else{
+   const ta=document.createElement('textarea');
+   ta.value=bitMonitorJson;document.body.appendChild(ta);ta.select();
+   if(!document.execCommand('copy'))throw new Error('Cópia não permitida');
+   ta.remove();
+  }
+  toast('Histórico copiado. Revise dados antes de compartilhar.');
+ }catch(e){toast('Não foi possível copiar automaticamente; selecione o texto do histórico.',true);}
+}
+
+'''
+h=h.replace(anchor,functions+anchor)
+needle='  const r=await api(\'bit-session-finish\',{result});\n  $(\'bitSelectedResult\').textContent=jsonText(r);'
+assert needle in h
+h=h.replace(needle,
+'''  ++bitMonitorSequence; // stop scheduled sampling promptly
+  const r=await api('bit-session-finish',{result});
+  $('bitSelectedResult').textContent=jsonText(r);
+  showBitCapture(r.capture);''')
+# If finishing request throws, re-enable sampling so operator can retry
+needle="}catch(e){$('bitSelectedResult').textContent=e.message;toast('Não foi possível liberar: '+e.message,true);}"
+assert needle in h
+h=h.replace(needle,
+"""}catch(e){$('bitSelectedResult').textContent=e.message;toast('Não foi possível liberar: '+e.message,true);if(bitTestPending)startBitMonitoring();}""")
+needle='    setBitAwaitingOutcome(true,spec);\n    toast('
+assert needle in h
+h=h.replace(needle,'    setBitAwaitingOutcome(true,spec);\n    startBitMonitoring();\n    toast(')
+needle="$('bitFetchReport').onclick=getBitTechnicalReport;"
+assert needle in h
+h=h.replace(needle,needle+"$('bitMonitorCopy').onclick=copyBitMonitor;")
+h=h.replace('S40 Lab v1.2 · Diagnóstico BIT','S40 Lab v1.3 · Captura durante o BIT')
+page.write_text(h)
+print("v1.3 patch: baseline, one-second asynchronous samples, change history, manual completion, copy button")
