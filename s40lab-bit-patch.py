@@ -182,7 +182,7 @@ hh=hh.replace('<button id="bitScan" class="btn primary" disabled>Entrar no BIT, 
 <button id="bitExit" class="btn danger" disabled>Tentar sair do BIT (recuperação)</button>
 <p class="note">Recuperação: ao tocar, você precisará confirmar SAIR BIT. Se não houver confirmação de saída, reinicie o S40 pelo botão físico.</p>''')
 hh=hh.replace("'rawReadBtn','runTestBtn','bitScan']", "'rawReadBtn','runTestBtn','bitScan','bitExit']")
-old="if(r.exit_error||r.exit_requested===false)toast("
+old="if(!r.exit_requested)toast("
 assert old in hh
 hh=hh.replace(old,"if(!r.exit_confirmed_by_transport)toast(")
 hh=hh.replace("async function refreshLogs(){",
