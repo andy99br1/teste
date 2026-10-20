@@ -668,3 +668,343 @@ hs=hs.replace("setupBitTestCatalog();","setupBitTestCatalog();$('runSelectedBit'
 hs=hs.replace("S40 Lab v0.2 · Interface experimental", "S40 Lab v0.8 · Interface experimental")
 h.write_text(hs)
 print("S40 Lab v0.8 patch: 11 BIT entries, live ID verification, required per-test instructions, guarded execution")
+
+
+# --- v0.9: persistent manual BIT session with explicit entry, selected tests, explicit exit
+p=Path("app/src/main/java/br/s40lab/app/S40Bridge.java")
+t=p.read_text()
+anchor='    private static final String[] BIT_NAMES={'
+assert anchor in t
+t=t.replace(anchor,'    private boolean manualBitSession=false;\n'+anchor)
+anchor='                case "bit-any-test":answer=bitAnyTest(b);break;'
+assert anchor in t
+t=t.replace(anchor,anchor+'''
+                case "bit-session-start":answer=bitSessionStart(b);break;
+                case "bit-session-status":answer=bitSessionStatus(b);break;
+                case "bit-session-test":answer=bitSessionTest(b);break;
+                case "bit-session-exit":answer=bitSessionExit(b);break;''')
+assert 'case "connect":answer=connect(b);break;' in t
+t=t.replace('case "connect":answer=connect(b);break;', 'case "connect":manualBitSession=false;answer=connect(b);break;')
+t=t.replace('case "disconnect":device=null;demo=false;ip=null;', 'case "disconnect":manualBitSession=false;device=null;demo=false;ip=null;')
+anchor='    /** Each test is selected from a strict whitelist and checked against the live device catalog. */'
+assert anchor in t
+code=r'''
+    /** Returns null if the device reports an empty catalog; throws on transport errors. */
+    private JSONObject liveBitCatalog()throws Exception{
+        JSONArray req=new JSONArray().put(new JSONObject()
+            .put("did",device.deviceId()).put("siid",99).put("piid",5));
+        JSONArray data=device.getProperties(req);
+        JSONObject item=data.optJSONObject(0);
+        if(item==null||item.optInt("code",-1)!=0)
+            throw new IllegalStateException("Sem confirmação da lista BIT 99-5.");
+        Object raw=item.opt("value");
+        if(raw==null||JSONObject.NULL.equals(raw)||String.valueOf(raw).trim().isEmpty())
+            return null;
+        if(raw instanceof JSONObject)return (JSONObject)raw;
+        return new JSONObject(String.valueOf(raw));
+    }
+    private JSONObject verifiedBitCatalog(JSONObject report,int polls)throws Exception{
+        JSONArray events=new JSONArray();
+        JSONObject list=null;
+        for(int poll=1;poll<=polls;poll++){
+            try{
+                if(poll>1)device.handshake();
+                list=liveBitCatalog();
+                if(list!=null){report.put("catalog_read_attempt",poll);break;}
+                events.put(new JSONObject().put("poll",poll).put("note","Lista vazia"));
+            }catch(Exception e){
+                events.put(new JSONObject().put("poll",poll).put("error",
+                    e.getMessage()==null?"Falha de comunicação":e.getMessage()));
+            }
+            if(poll<polls)SystemClock.sleep(1500);
+        }
+        report.put("catalog_events",events);
+        return list;
+    }
+    /** Start only, do not automatically leave if entry is successful. */
+    private JSONObject bitSessionStart(JSONObject b)throws Exception{
+        requireDevice();
+        if(demo)throw new IllegalArgumentException("BIT indisponível na demonstração.");
+        if(!b.optBoolean("safe_location",false)||
+            !"ENTRAR BIT".equals(b.optString("confirmation")))
+            throw new IllegalArgumentException("Confirme o local seguro e digite ENTRAR BIT.");
+        JSONObject report=ok().put("procedure","enter BIT once, verify 99-5, keep session active");
+        JSONObject catalogNow=null;
+        try{catalogNow=liveBitCatalog();}catch(Exception e){
+            report.put("initial_check_error",e.getMessage());
+        }
+        if(catalogNow!=null){
+            manualBitSession=true;
+            return report.put("already_active",true).put("bit_active",true)
+                .put("catalog",catalogNow).put("note","Sessão BIT já detectada. Nenhum comando BIT reenviado.");
+        }
+        JSONArray attempts=new JSONArray();
+        for(int entry=1;entry<=2&&catalogNow==null;entry++){
+            JSONObject record=new JSONObject().put("entry_attempt",entry);
+            attempts.put(record);
+            if(entry==2){
+                try{record.put("reset_ack",safe(device.setProperty(99,1,"normal"))); }
+                catch(Exception e){record.put("reset_error",e.getMessage());}
+                SystemClock.sleep(2000);
+                try{device.handshake();}catch(Exception ignore){}
+            }
+            try{
+                Object ack=device.setProperty(99,1,"BIT");
+                record.put("ack",safe(ack));
+                JSONObject item=(ack instanceof JSONArray)?((JSONArray)ack).optJSONObject(0):
+                    ((ack instanceof JSONObject)?(JSONObject)ack:null);
+                if(item==null||item.optInt("code",-1)!=0)
+                    throw new IllegalStateException("Comando BIT não aceito.");
+                SystemClock.sleep(10000);
+                catalogNow=verifiedBitCatalog(record,6);
+            }catch(Exception e){record.put("entry_error",
+                e.getMessage()==null?"Falha de comunicação":e.getMessage());}
+        }
+        report.put("entry_attempts",attempts);
+        if(catalogNow==null){
+            manualBitSession=false;
+            attemptBitExit(report);
+            return report.put("bit_active",false)
+                .put("error_message","Entrada não confirmada; solicitação NORMAL enviada. Se houver dúvida, reinicie pelo botão físico.");
+        }
+        manualBitSession=true;
+        return report.put("bit_active",true).put("catalog",catalogNow)
+            .put("warning","Sessão BIT permanece aberta até usar Sair do BIT manualmente. Não inicie limpeza convencional.");
+    }
+    /** One live-status read; restoring a session after relaunch requires active user click. */
+    private JSONObject bitSessionStatus(JSONObject b)throws Exception{
+        requireDevice();
+        if(demo)throw new IllegalArgumentException("BIT indisponível na demonstração.");
+        JSONObject report=ok();
+        try{
+            JSONObject catalogNow=liveBitCatalog();
+            manualBitSession=(catalogNow!=null);
+            return report.put("bit_active",manualBitSession)
+                .put("catalog",catalogNow==null?JSONObject.NULL:catalogNow)
+                .put("note",manualBitSession?"Lista BIT presente: sessão recuperada.":"Lista BIT vazia: compatível com modo normal.");
+        }catch(Exception e){
+            manualBitSession=false;
+            return report.put("bit_active",JSONObject.NULL)
+                .put("status_error",e.getMessage()==null?"Sem resposta":e.getMessage())
+                .put("warning","Estado desconhecido; não execute testes. Se necessário, reinicie pelo botão físico.");
+        }
+    }
+    /** Execute exactly one manually selected test, without BIT entry or exit. */
+    private JSONObject bitSessionTest(JSONObject b)throws Exception{
+        requireDevice();
+        if(demo)throw new IllegalArgumentException("BIT indisponível na demonstração.");
+        String name=b.optString("test_name","");
+        int index=-1;
+        for(int i=0;i<BIT_NAMES.length;i++)if(BIT_NAMES[i].equals(name))index=i;
+        if(index<0)throw new IllegalArgumentException("Teste não reconhecido.");
+        int id=BIT_IDS[index],wait=BIT_WAIT_SECONDS[index];
+        if(id==1)throw new IllegalArgumentException("Teste automático de todos desativado: execute cada um manualmente.");
+        if(!manualBitSession)throw new IllegalStateException("Sessão BIT não confirmada. Entre no BIT ou use Verificar estado.");
+        if(!b.optBoolean("safe_location",false)||
+            !("TESTAR "+id).equals(b.optString("confirmation")))
+            throw new IllegalArgumentException("Confirme posição segura e digite TESTAR "+id+".");
+        JSONObject report=ok().put("test_name",name).put("test_id",id)
+            .put("procedure","verify BIT active -> run only selected test -> remain in BIT")
+            .put("observation_seconds",wait);
+        JSONObject list=null;
+        try{list=liveBitCatalog();}catch(Exception e){
+            return report.put("test_command_accepted",false)
+                .put("test_error","Não foi possível confirmar BIT: "+e.getMessage());
+        }
+        if(list==null){
+            manualBitSession=false;
+            return report.put("test_command_accepted",false)
+                .put("test_error","Lista 99-5 vazia. Motor e sensores NÃO acionados.");
+        }
+        if(list.optInt(name,-1)!=id)
+            return report.put("test_command_accepted",false)
+                .put("test_error","ID do teste não corresponde à lista do robô. Execução bloqueada.");
+        report.put("catalog_confirmed",true);
+        Object ack=device.setProperty(99,2,id);
+        report.put("start_ack",safe(ack));
+        JSONObject item=(ack instanceof JSONArray)?((JSONArray)ack).optJSONObject(0):
+            ((ack instanceof JSONObject)?(JSONObject)ack:null);
+        boolean accepted=item!=null&&item.optInt("code",-1)==0;
+        report.put("test_command_accepted",accepted);
+        if(accepted)SystemClock.sleep(wait*1000L);
+        return report.put("bit_remains_requested",true)
+            .put("warning","BIT NÃO é encerrado após este teste. Ouça o PASS/FAIL do robô e use Sair do BIT manualmente ao terminar.");
+    }
+    /** Explicitly leave BIT. Distinguish transport ack from proof by catalog. */
+    private JSONObject bitSessionExit(JSONObject b)throws Exception{
+        requireDevice();
+        if(demo)throw new IllegalArgumentException("Apenas o robô real.");
+        if(!"SAIR BIT".equals(b.optString("confirmation")))
+            throw new IllegalArgumentException("Confirme SAIR BIT.");
+        JSONObject report=ok().put("procedure","request normal 99-1; verify 99-5 empty");
+        attemptBitExit(report);
+        boolean verified=false;
+        JSONArray events=new JSONArray();
+        for(int i=1;i<=4;i++){
+            try{
+                SystemClock.sleep(1500);
+                if(i>1)device.handshake();
+                JSONObject list=liveBitCatalog();
+                if(list==null){verified=true;report.put("exit_check_attempt",i);break;}
+                events.put(new JSONObject().put("attempt",i).put("result","Catálogo BIT ainda presente"));
+            }catch(Exception e){
+                events.put(new JSONObject().put("attempt",i).put("error",
+                    e.getMessage()==null?"Sem resposta":e.getMessage()));
+            }
+        }
+        manualBitSession=false;
+        report.put("exit_verified_by_empty_catalog",verified).put("exit_checks",events)
+            .put("bit_active",verified?false:JSONObject.NULL);
+        if(!verified)report.put("warning",
+            "Saída não verificada. Pare os testes; desligue e ligue pelo botão físico se permanecer no BIT.");
+        return report;
+    }
+
+'''
+t=t.replace(anchor,code+anchor)
+p.write_text(t)
+g=Path("app/build.gradle")
+gs=g.read_text()
+assert "versionCode 8; versionName '0.8.0'" in gs
+g.write_text(gs.replace("versionCode 8; versionName '0.8.0'",
+                         "versionCode 9; versionName '0.9.0'"))
+h=Path("app/src/main/assets/index.html")
+html=h.read_text()
+import re
+# Replace old per-test automatic BIT UI with manual-session controls, preserving tile selection IDs.
+prefix='''<section id="bit" class="page">
+<div class="heading"><h2>BIT manual · Sessão única</h2><p>Entre uma vez, execute os testes individuais que desejar e saia pelo botão Sair do BIT.</p></div>
+<div class="card stack">
+<div class="notice red">O BIT movimenta componentes. Mantenha o robô em local seguro, com supervisão contínua. Não feche o aplicativo nem desconecte sem sair do BIT. Se perder a comunicação, reinicie pelo botão físico.</div>
+<label class="checkline"><input type="checkbox" id="bitSafety"> Robô estável, afastado de quedas, pessoas e animais; vou seguir o posicionamento de cada teste.</label>
+<div><label for="bitStartConfirm">Para entrar digite ENTRAR BIT</label><input id="bitStartConfirm" placeholder="ENTRAR BIT" autocomplete="off"/></div>
+<div class="row" style="flex-wrap:wrap;gap:10px">
+<button id="bitSessionStart" class="btn primary" disabled>1. Entrar no BIT</button>
+<button id="bitSessionStatus" class="btn" disabled>Verificar estado do BIT</button>
+<button id="bitExit" class="btn danger" disabled>3. Sair do BIT</button>
+</div>
+<div class="notice blue" id="bitSessionState">BIT não confirmado. Clique em Entrar no BIT antes de escolher testes.</div>
+<pre id="bitOutput" class="output">Nenhuma sessão BIT iniciada.</pre>
+</div>
+<div class="card stack section" id="bitAllPanel" style="margin-top:18px">
+<h3>2. Escolher e executar testes individualmente</h3>
+<p class="note">Os testes NÃO saem do BIT automaticamente. Altere a posição do robô somente depois que o teste anterior terminar e com componentes parados.</p>
+<div class="grid" id="bitChoiceGrid">'''
+pat=r'(?s)<section id="bit" class="page">.*?<div class="grid" id="bitChoiceGrid">'
+html,n=re.subn(pat,prefix,html,count=1)
+assert n==1
+# Remove Test-all tile but preserve other ten choices; no automatic sequence in manual mode.
+html,n=re.subn(r'<button class="btn bit-test-choice" type="button" data-bit-key="\*Test all" disabled>.*?</button>', '',html,count=1)
+assert n==1
+# Replace old bottom content (keeps test grid, description and button) from after panel until before next section.
+endpattern=r'(?s)<p class="note">Durante os testes, siga os avisos de voz\..*?</div></section>\s*<section id="registros" class="page">'
+endreplace='''<p class="note">Quando terminar, use o botão “3. Sair do BIT” no topo. O S40 deve parar todos os testes antes de você mudar sua posição. Se houver timeout na saída, use o botão físico para reiniciar.</p>
+</div></section>
+<section id="registros" class="page">'''
+html,n=re.subn(endpattern,endreplace,html,count=1)
+assert n==1, "end section not found"
+# Session widgets must participate in busy connection handling
+assert "'bitScan','bitExit','brushBitRun','runSelectedBit'" in html
+html=html.replace("'bitScan','bitExit','brushBitRun','runSelectedBit'",
+                  "'bitSessionStart','bitSessionStatus','bitExit','runSelectedBit'")
+# Update JS selection handling for manually selected test.
+start=html.index('async function runSelectedBit(){')
+end=html.index('async function runBitExit(){',start)
+manual_js=r'''
+let bitSessionUiActive=false;
+function showSessionState(active){
+ bitSessionUiActive=(active===true);
+ $('bitSessionState').textContent=active===true
+     ?'BIT ATIVO: escolha e execute os testes abaixo; ao terminar, clique em Sair do BIT.'
+     :active===false
+        ?'BIT inativo/fora do modo de testes. Clique em Entrar no BIT.'
+        :'Estado do BIT incerto. Não execute testes. Verifique o modo ou reinicie pelo botão físico.';
+ $('bitSessionState').style.borderColor=active===true?'#63b793':active===false?'':'#f27b87';
+}
+async function enterManualBit(){
+ if(!con||busy)return;
+ if(!$('bitSafety').checked||$('bitStartConfirm').value.trim()!=='ENTRAR BIT'){
+   toast('Confirme o local seguro e digite ENTRAR BIT.',true);return;
+ }
+ if(!window.confirm('Entrar no BIT? O robô permanecerá nesse modo até você clicar em Sair do BIT.'))return;
+ setBusy(true);
+ $('bitOutput').textContent='Aguardando a lista de testes para confirmar entrada no BIT...';
+ try{
+  const r=await api('bit-session-start',{confirmation:'ENTRAR BIT',safe_location:true});
+  $('bitOutput').textContent=jsonText(r);
+  showSessionState(r.bit_active===true);
+  if(r.bit_active===true){$('autoRefresh').checked=false;toast('BIT ativo. Selecione testes individualmente e saia manualmente.');}
+  else toast('BIT não confirmado. Não execute testes.',true);
+ }catch(e){showSessionState(null);$('bitOutput').textContent=e.message;toast(e.message,true);}
+ finally{setBusy(false)}
+}
+async function verifyManualBit(){
+ if(!con||busy)return;
+ setBusy(true);
+ try {
+  let r=await api('bit-session-status',{});
+  $('bitOutput').textContent=jsonText(r);
+  showSessionState(r.bit_active);
+  toast(r.bit_active===true?'BIT ativo.':'BIT não confirmado ou desligado.',r.bit_active!==true);
+ }catch(e){showSessionState(null);toast('Não foi possível confirmar o modo: '+e.message,true);}
+ finally{setBusy(false)}
+}
+async function exitManualBit(){
+ if(!con||busy)return;
+ if(!window.confirm('Enviar NORMAL e encerrar a sessão BIT? Certifique-se de que nenhum teste ainda está girando.'))return;
+ setBusy(true);
+ $('bitOutput').textContent='Enviando NORMAL e verificando lista BIT...';
+ try{
+  const r=await api('bit-session-exit',{confirmation:'SAIR BIT'});
+  $('bitOutput').textContent=jsonText(r);
+  showSessionState(r.exit_verified_by_empty_catalog===true?false:null);
+  if(r.exit_verified_by_empty_catalog)toast('Saída do BIT compatível com modo normal.');
+  else toast('Saída não comprovada. Reinicie pelo botão físico se continuar no BIT.',true);
+ }catch(e){showSessionState(null);$('bitOutput').textContent=e.message;toast('Saída não confirmada: '+e.message,true);}
+ finally{setBusy(false)}
+}
+async function runSelectedBit(){
+ if(!con||busy||!bitSelected){toast('Escolha um teste antes.',true);return;}
+ if(!bitSessionUiActive){toast('Entre no BIT e confirme a lista antes de executar.',true);return;}
+ const id=bitSelected.id;
+ if(id===1){toast('A sequência automática está desativada. Selecione testes individuais.',true);return;}
+ let phrase='TESTAR '+id;
+ if($('bitChoiceConfirmation').value.trim()!==phrase){
+  toast('Digite '+phrase+' exatamente para confirmar.',true);return;
+ }
+ if(!$('bitSafety').checked){toast('Confirme o ambiente seguro.',true);return;}
+ if(!window.confirm('Executar SOMENTE '+bitSelected.pt+' (ID '+id+') sem sair do BIT? Verifique a posição do robô.'))return;
+ setBusy(true);
+ $('bitSelectedResult').textContent='Executando '+bitSelected.pt+'; aguarde o resultado. O aplicativo NÃO sairá do BIT.';
+ try{
+  let r=await api('bit-session-test',{
+   test_name:bitSelected.key,
+   confirmation:phrase,
+   safe_location:true
+  });
+  $('bitSelectedResult').textContent=jsonText(r);
+  if(r.test_command_accepted)toast('Teste concluído no tempo de observação. BIT continua ativo.');
+  else{
+    if((r.test_error||'').includes('vazia'))showSessionState(false);
+    toast('Teste não iniciado: veja o diagnóstico.',true);
+  }
+ }catch(e){$('bitSelectedResult').textContent=e.message;showSessionState(null);toast('Falha de comunicação. Verifique BIT antes de continuar.',true);}
+ finally{setBusy(false)}
+}
+'''
+html=html[:start]+manual_js+html[end:]
+# Existing runBitExit is old/unused, remove to avoid ambiguity
+start=html.index('async function runBitExit(){')
+end=html.index('async function refreshLogs(){',start)
+html=html[:start]+html[end:]
+# Init handlers exact replacement
+old="$('bitScan').onclick=runBitList;$('bitExit').onclick=runBitExit;$('brushBitRun').onclick=runBrushBit;setupBitTestCatalog();$('runSelectedBit').onclick=runSelectedBit;"
+new="$('bitSessionStart').onclick=enterManualBit;$('bitSessionStatus').onclick=verifyManualBit;$('bitExit').onclick=exitManualBit;setupBitTestCatalog();$('runSelectedBit').onclick=runSelectedBit;"
+assert old in html
+html=html.replace(old,new)
+# In setupBitTestCatalog, allTestsExtraRow and allTestsExtra elements remain as hidden backing; no auto button.
+# Remove stray old runBitList and runBrushBit to avoid confusing API, if present.
+# These orphan functions aren't wired to controls and are harmless.
+html=html.replace('S40 Lab v0.8 · Interface experimental', 'S40 Lab v0.9 · Sessão BIT manual')
+h.write_text(html)
+print("S40 Lab v0.9 patch done: manual BIT session control, explicit safe test selection & exit")
