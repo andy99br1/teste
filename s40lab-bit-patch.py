@@ -1008,3 +1008,139 @@ html=html.replace(old,new)
 html=html.replace('S40 Lab v0.8 · Interface experimental', 'S40 Lab v0.9 · Sessão BIT manual')
 h.write_text(html)
 print("S40 Lab v0.9 patch done: manual BIT session control, explicit safe test selection & exit")
+
+
+# --- v1.0: asynchronous LAN transport (WebView does not freeze during S40 BIT tests)
+bridge=Path("app/src/main/java/br/s40lab/app/S40Bridge.java")
+b=bridge.read_text()
+assert 'import android.webkit.JavascriptInterface;' in b
+b=b.replace('import android.webkit.JavascriptInterface;',
+'''import android.webkit.JavascriptInterface;
+import android.webkit.WebView;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;''')
+assert '    private final JSONObject catalog;' in b
+b=b.replace('    private final JSONObject catalog;',
+'''    private final WebView callbackWebView;
+    private final ExecutorService ioQueue=Executors.newSingleThreadExecutor();
+    private final JSONObject catalog;''')
+assert 'public S40Bridge(AssetManager assets){' in b
+b=b.replace('public S40Bridge(AssetManager assets){',
+            'public S40Bridge(AssetManager assets, WebView webView){\n        callbackWebView=webView;')
+needle='    @JavascriptInterface\n    public synchronized String request(String raw){'
+assert needle in b
+# A synchronous method remains for compatibility, but normal UI calls requestAsync.
+async_java=r'''
+    /** Nonblocking JS bridge: device work is serialized on a dedicated worker. */
+    @JavascriptInterface
+    public void requestAsync(final String raw,final String callbackId){
+        if(callbackId==null||!callbackId.matches("[a-zA-Z0-9_-]{1,50}"))return;
+        try{
+            ioQueue.execute(()->{
+                String result;
+                try{ result=request(raw); }
+                catch(Throwable e){
+                    try{result=new JSONObject().put("ok",false).put("error",
+                        "Falha interna de comunicação: "+e.getClass().getSimpleName()).toString();}
+                    catch(Exception ignored){result="{\"ok\":false,\"error\":\"Falha interna\"}";}
+                }
+                final String finalResult=result;
+                try{
+                    callbackWebView.post(()->{
+                        try{
+                            callbackWebView.evaluateJavascript(
+                                "window.s40NativeDone("+JSONObject.quote(callbackId)+","+
+                                    JSONObject.quote(finalResult)+");",null);
+                        }catch(Exception ignored){}
+                    });
+                }catch(Exception ignored){}
+            });
+        }catch(RejectedExecutionException ignored){}
+    }
+
+    public void close(){
+        ioQueue.shutdownNow();
+    }
+
+'''
+b=b.replace(needle,async_java+needle)
+bridge.write_text(b)
+activity=Path("app/src/main/java/br/s40lab/app/MainActivity.java")
+a=activity.read_text()
+assert '    private WebView web;' in a
+a=a.replace('    private WebView web;', '    private WebView web;\n    private S40Bridge robotBridge;')
+assert 'web.addJavascriptInterface(new S40Bridge(getAssets()), "S40Android");' in a
+a=a.replace('web.addJavascriptInterface(new S40Bridge(getAssets()), "S40Android");',
+'''robotBridge=new S40Bridge(getAssets(),web);
+        web.addJavascriptInterface(robotBridge, "S40Android");''')
+a=a.replace('    @Override protected void onDestroy() {\n',
+            '    @Override protected void onDestroy() {\n        if(robotBridge!=null){robotBridge.close();robotBridge=null;}\n')
+activity.write_text(a)
+page=Path("app/src/main/assets/index.html")
+ht=page.read_text()
+needle="async function api(route,body=undefined){if(!window.S40Android)throw Error('Abra pelo aplicativo S40 Lab instalado, não pelo navegador.');let raw=S40Android.request(JSON.stringify({route:route,body:body===undefined?null:body}));let data=JSON.parse(raw);if(!data.ok)throw Error(data.error||'Falha de comunicação');return data}"
+assert needle in ht
+replacement=r'''const s40PendingCalls=new Map();
+let s40CallSerial=0;
+window.s40NativeDone=(id,raw)=>{
+  const item=s40PendingCalls.get(id);
+  if(!item)return;
+  s40PendingCalls.delete(id);
+  try{
+    const data=JSON.parse(raw);
+    if(data.ok)item.resolve(data);
+    else item.reject(new Error(data.error||'Falha de comunicação'));
+  }catch(err){item.reject(err)}
+};
+async function api(route,body=undefined){
+ if(!window.S40Android)throw Error('Abra pelo aplicativo S40 Lab instalado, não pelo navegador.');
+ const serialized=JSON.stringify({route,body:body===undefined?null:body});
+ if(typeof S40Android.requestAsync==='function'){
+   return new Promise((resolve,reject)=>{
+     const id='s40_'+(++s40CallSerial);
+     s40PendingCalls.set(id,{resolve,reject});
+     try{S40Android.requestAsync(serialized,id)}
+     catch(e){s40PendingCalls.delete(id);reject(e)}
+   });
+ }
+ const data=JSON.parse(S40Android.request(serialized));
+ if(!data.ok)throw Error(data.error||'Falha de comunicação');
+ return data;
+}'''
+ht=ht.replace(needle,replacement)
+# Fix a stale reference to a nonexistent checkbox that previously caused a UI exception
+ht=ht.replace("$('autoRefresh').checked=false;","")
+# Provide a live elapsed timer while the robot runs the BIT test on the native worker
+old="""setBusy(true);
+ $('bitSelectedResult').textContent='Executando '+bitSelected.pt+'; aguarde o resultado. O aplicativo NÃO sairá do BIT.';
+ try{
+  let r=await api('bit-session-test',"""
+assert old in ht
+new="""setBusy(true);
+ const progressLabel=bitSelected.pt;
+ const progressStart=Date.now();
+ const progressEstimated=bitSelected.sec;
+ const progressTimer=setInterval(()=>{
+   const elapsed=Math.floor((Date.now()-progressStart)/1000);
+   $('bitSelectedResult').textContent='Teste em andamento: '+progressLabel+'\\nTempo decorrido: '+elapsed+'s / ~'+progressEstimated+'s\\n\\nA interface continua disponível. Aguarde o aviso de PASS/FAIL do S40. O modo BIT permanece ativo.';
+ },500);
+ $('bitSelectedResult').textContent='Iniciando '+progressLabel+'. Aguardando resposta do S40...';
+ try{
+  let r=await api('bit-session-test',"""
+ht=ht.replace(old,new)
+old="finally{setBusy(false)}\n}\nasync function refreshLogs(){"
+# Should be last runSelectedBit finally before refresh logs? need inspect transformed source contains before other code
+if old not in ht:
+    # prefix find ending of runSelectedBit between that and old dead functions
+    pos=ht.find("async function runSelectedBit(){")
+    print("Tail function:",ht[pos:pos+2200][-500:])
+    raise AssertionError("Run test finally pattern missing")
+ht=ht.replace(old,"finally{clearInterval(progressTimer);setBusy(false)}\n}\nasync function refreshLogs(){",1)
+# UI copy
+ht=ht.replace('S40 Lab v0.9 · Sessão BIT manual','S40 Lab v1.0 · BIT fluido')
+page.write_text(ht)
+grad=Path('app/build.gradle');gs=grad.read_text()
+assert "versionCode 9; versionName '0.9.0'" in gs
+grad.write_text(gs.replace("versionCode 9; versionName '0.9.0'","versionCode 10; versionName '1.0.0'"))
+print("v1.0: requestAsync background worker + responsive WebView + live timer")
