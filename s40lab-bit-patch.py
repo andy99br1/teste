@@ -291,3 +291,124 @@ hh=hh.replace('async function runBitExit(){',js+'\nasync function runBitExit(){'
 hh=hh.replace("$('bitExit').onclick=runBitExit;", "$('bitExit').onclick=runBitExit;$('brushBitRun').onclick=runBrushBit;")
 html.write_text(hh)
 print("S40 Lab v0.6 patch applied: 30-second Rolling brush BIT, verified code 5, safe exit")
+
+
+# --- v0.7: retry confirmed BIT entry once; safely gate brush test on live list
+p=Path("app/src/main/java/br/s40lab/app/S40Bridge.java")
+t=p.read_text()
+start=t.index('    /** S40/H40 SOP: Rolling brush test runs about 30 seconds and announces pass/fail. */')
+end=t.index('    /** Recovery command; does not enter BIT or run any test. */',start)
+replacement=r'''
+    /** Run rolling brush only after proof-of-BIT: firmware must list test 5. */
+    private JSONObject bitMainBrush(JSONObject b)throws Exception{
+        requireDevice();
+        if(demo)throw new IllegalArgumentException("BIT indisponível em demonstração.");
+        if(!"TESTAR ESCOVA".equals(b.optString("confirmation"))||!b.optBoolean("safe_location",false))
+            throw new IllegalArgumentException("Confirme a posição segura e digite TESTAR ESCOVA.");
+        JSONObject report=ok().put("procedure","enter BIT -> verify live 99-5 (up to 2 entry attempts) -> execute ONLY ID 5 -> wait 33s -> normal -> read 99-5");
+        JSONArray req=new JSONArray().put(new JSONObject()
+            .put("did",device.deviceId()).put("siid",99).put("piid",5));
+        JSONArray events=new JSONArray();
+        JSONObject testList=null;
+        int usedEntry=0;
+        try{
+            for(int entry=1;entry<=2 && testList==null;entry++){
+                usedEntry=entry;
+                if(entry==2){
+                    // If the first entry was not confirmed, request normal before trying BIT again.
+                    try{
+                        report.put("reset_before_retry",safe(device.setProperty(99,1,"normal")));
+                    }catch(Exception e){
+                        events.put(new JSONObject().put("entry",entry).put("stage","reset").put("error",String.valueOf(e.getMessage())));
+                    }
+                    SystemClock.sleep(2200);
+                    try{device.handshake();}catch(Exception ignored){}
+                }
+                try {
+                    JSONArray ack=device.setProperty(99,1,"BIT");
+                    report.put("enter_ack_"+entry,safe(ack));
+                    JSONObject first=ack.optJSONObject(0);
+                    if(first==null||first.optInt("code",-1)!=0)
+                        throw new IllegalStateException("Entrada BIT não aceita no ciclo "+entry);
+                    SystemClock.sleep(10000);
+                    for(int i=0;i<6;i++){
+                        try{
+                            if(i>0)device.handshake();
+                            JSONArray reply=device.getProperties(req);
+                            JSONObject item=reply.optJSONObject(0);
+                            if(item!=null && item.optInt("code",-1)==0){
+                                Object raw=item.opt("value");
+                                if(raw instanceof JSONObject)testList=(JSONObject)raw;
+                                else if(raw!=null&&!JSONObject.NULL.equals(raw)&&!String.valueOf(raw).trim().isEmpty())
+                                    testList=new JSONObject(String.valueOf(raw));
+                                if(testList!=null){
+                                    report.put("list_read_attempt",i+1);
+                                    break;
+                                }
+                            }
+                            events.put(new JSONObject().put("entry",entry).put("poll",i+1).put("reply",reply));
+                        }catch(Exception e){
+                            events.put(new JSONObject().put("entry",entry).put("poll",i+1).put("error",String.valueOf(e.getMessage())));
+                        }
+                        if(i<5)SystemClock.sleep(1500);
+                    }
+                }catch(Exception e){
+                    events.put(new JSONObject().put("entry",entry).put("stage","enter").put("error",String.valueOf(e.getMessage())));
+                }
+            }
+            report.put("entry_attempts",usedEntry);
+            if(testList==null)throw new IllegalStateException("Entrada BIT não confirmada pela lista 99-5. Motor não acionado.");
+            report.put("list_confirmed",testList);
+            if(testList.optInt("Rolling brush testing",-1)!=5)
+                throw new IllegalStateException("Lista BIT não confirma Rolling brush testing = 5. Motor não acionado.");
+            JSONArray startAck=device.setProperty(99,2,5);
+            report.put("test_start_ack",safe(startAck));
+            JSONObject first=startAck.optJSONObject(0);
+            if(first==null||first.optInt("code",-1)!=0)
+                throw new IllegalStateException("Comando 99-2=5 não aceito. Motor não confirmado.");
+            report.put("test_command_accepted",true)
+                  .put("expected_test","Rolling brush testing por aproximadamente 30s; resultado falado pelo S40");
+            SystemClock.sleep(33000);
+            report.put("observation_window_seconds",33);
+        }catch(Exception e){
+            report.put("test_error",e.getMessage()==null?"Falha de comunicação":e.getMessage());
+        }finally{
+            report.put("read_events",events).put("entry_attempts",usedEntry);
+            attemptBitExit(report);
+            if(report.optBoolean("exit_confirmed_by_transport",false)){
+                try{
+                    SystemClock.sleep(1800);
+                    JSONArray check=device.getProperties(req);
+                    report.put("exit_list_read",check);
+                    JSONObject item=check.optJSONObject(0);
+                    if(item!=null && item.optInt("code",-1)==0){
+                        Object val=item.opt("value");
+                        report.put("exit_list_empty",
+                            val==null||JSONObject.NULL.equals(val)||String.valueOf(val).trim().isEmpty());
+                    }
+                }catch(Exception e){
+                    report.put("exit_list_check_error",String.valueOf(e.getMessage()));
+                }
+            }
+        }
+        return report.put("warning","99-2=5 só é enviado após lista BIT confirmar identificador 5. ACK não confirma resultado do motor. Saída incerta: reinicie pelo botão físico. Não toque na escova durante o BIT.");
+    }
+
+'''
+t=t[:start]+replacement+t[end:]
+p.write_text(t)
+g=Path("app/build.gradle")
+gs=g.read_text()
+assert "versionCode 6; versionName '0.6.0'" in gs
+g.write_text(gs.replace("versionCode 6; versionName '0.6.0'","versionCode 7; versionName '0.7.0'"))
+h=Path("app/src/main/assets/index.html")
+hs=h.read_text()
+assert "Testar somente a escova principal (~30 s)" in hs
+hs=hs.replace("Teste BIT oficial Rolling brush testing (ID 5). A escova pode girar por cerca de 30 segundos.",
+              "Teste BIT Rolling brush testing (ID 5). A entrada será confirmada pela lista do firmware antes do acionamento, com até duas tentativas. A escova pode girar por cerca de 30 segundos.")
+hs=hs.replace("if(!r.exit_confirmed_by_transport)toast('Saída BIT não confirmada! Desligue e ligue fisicamente.',true);",
+              "if(!r.exit_confirmed_by_transport||r.exit_list_empty===false)toast('Saída BIT não verificada: desligue e ligue fisicamente.',true);")
+hs=hs.replace("else if(!r.test_command_sent)toast('Teste não executado; confira os detalhes.',true);",
+              "else if(!r.test_command_accepted)toast('Teste não executado; confira os detalhes.',true);")
+h.write_text(hs)
+print("S40 Lab v0.7 patch ready: automatic guarded BIT retry, exit-list probe")
