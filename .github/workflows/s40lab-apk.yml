@@ -201,6 +201,8 @@ jobs:
           g3rg5V/5MQe1uOL4zS6rKpM+AGWxXiqqGq7QIAPQHe7cU8j1mHGVI/DlhRCFDe7VzbAypV5ZN9Q5W2YBuQwTx6jnrDSG+A0Q+Ol/b8ku50th+j4TwHAfr/c6a4RTEf4dHG8bII1TOhH7hJuUEsIvfDhTZZ75lRmh
           bgsy0Ts4ZEzcmWCtf9TaSep+h8IabLtn5UqSSwPbT7YdDdZryqVVcoM7qnoRAAAANdmstpWsIGQAAeOtAYDwBrveZH+xxGf7AgAAAAAEWVo=
           S40LAB_SRC_XZ
+      - name: Add guarded BIT test-list probe
+        run: python3 s40lab-bit-patch.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
