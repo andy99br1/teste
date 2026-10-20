@@ -66,3 +66,128 @@ assert "$('runTestBtn').onclick=runTest;" in x
 x=x.replace("$('runTestBtn').onclick=runTest;","$('runTestBtn').onclick=runTest;$('bitScan').onclick=runBitList;")
 h.write_text(x)
 print("BIT read-only enumeration patch applied successfully")
+
+
+# --- v0.5: real MIoT DID, stabilized BIT polling, best-effort exit and manual recovery
+m = Path("app/src/main/java/br/s40lab/app/MiiSocket.java")
+ms = m.read_text()
+assert '    public JSONObject info() throws Exception {' in ms
+ms = ms.replace('    public JSONObject info() throws Exception {', '''
+    /** Actual unsigned device ID from the miIO handshake, never hardcoded. */
+    public synchronized String deviceId() throws Exception {
+        if(did==null)handshake();
+        return Long.toString(readLong(did,0));
+    }
+    public JSONObject info() throws Exception {''')
+ms = ms.replace('req.put("did",s+"-"+p);req.put("siid",s);req.put("piid",p);req.put("value",value);',
+                'req.put("did",s==99?deviceId():s+"-"+p);req.put("siid",s);req.put("piid",p);req.put("value",value);')
+m.write_text(ms)
+src=Path("app/src/main/java/br/s40lab/app/S40Bridge.java")
+ss=src.read_text()
+assert 'case "bit-list":answer=bitList(b);break;' in ss
+ss=ss.replace('case "bit-list":answer=bitList(b);break;',
+              'case "bit-list":answer=bitList(b);break;\n                case "bit-exit":answer=bitExit(b);break;')
+start=ss.index('    private JSONObject bitList(JSONObject b)throws Exception{')
+end=ss.index('    private JSONObject brushObservation(',start)
+replacement=r'''    /** Probe only: no test/calibration execution; the robot may drop service communication in BIT. */
+    private JSONObject bitList(JSONObject b)throws Exception{
+        requireDevice();
+        if(demo)throw new IllegalArgumentException("O modo demonstração não oferece BIT.");
+        if(!"CONSULTAR BIT".equals(b.optString("confirmation"))||!b.optBoolean("safe_location",false))
+            throw new IllegalArgumentException("Confirme ambiente seguro e digite CONSULTAR BIT.");
+        JSONObject report=ok().put("procedure","enter BIT -> wait 10s -> read 99-5 with real DID -> attempt normal");
+        JSONArray req=new JSONArray().put(new JSONObject()
+            .put("did",device.deviceId()).put("siid",99).put("piid",5));
+        JSONArray readErrors=new JSONArray();
+        boolean gotList=false;
+        try{
+            report.put("enter_ack",safe(device.setProperty(99,1,"BIT")));
+            log("bit","Entrada BIT confirmada pelo transporte; aguardando 10 segundos",null);
+            SystemClock.sleep(10000);
+            for(int i=0;i<4;i++){
+                try{
+                    if(i>0)device.handshake(); // Refresh session after service transitions.
+                    JSONArray replies=device.getProperties(req);
+                    JSONObject item=replies.optJSONObject(0);
+                    int code=item==null?-1:item.optInt("code",-1);
+                    if(code==0){
+                        Object val=item.opt("value");
+                        if(val!=null&&!JSONObject.NULL.equals(val)&&!String.valueOf(val).trim().isEmpty()){
+                            report.put("test_list",val).put("read_attempt",i+1);
+                            gotList=true;
+                            break;
+                        }
+                    }else{
+                        readErrors.put(new JSONObject().put("attempt",i+1).put("code",code));
+                    }
+                }catch(Exception e){
+                    readErrors.put(new JSONObject().put("attempt",i+1).put("message",
+                        e.getMessage()==null?"Falha de comunicação":e.getMessage()));
+                }
+                SystemClock.sleep(1300);
+            }
+        }catch(Exception e){
+            report.put("probe_error",e.getMessage()==null?"Falha de comunicação":e.getMessage());
+        }finally{
+            report.put("list_received",gotList).put("read_errors",readErrors);
+            attemptBitExit(report);
+        }
+        return report.put("warning","Sem execução de 99-2. Falha de confirmação da saída exige desligar e ligar pelo botão físico.");
+    }
+
+    /** Always best-effort: transport ACK never proves the robot has left service mode. */
+    private void attemptBitExit(JSONObject report)throws Exception{
+        report.put("exit_confirmed_by_transport",false).put("exit_send_attempted",true);
+        try{
+            report.put("exit_ack",safe(device.setProperty(99,1,"normal")));
+            report.put("exit_confirmed_by_transport",true);
+        }catch(Exception first){
+            report.put("exit_error_first",first.getMessage()==null?"Falha de comunicação":first.getMessage());
+            try{
+                SystemClock.sleep(1600);
+                device.handshake();
+                report.put("exit_ack_retry",safe(device.setProperty(99,1,"normal")));
+                report.put("exit_confirmed_by_transport",true);
+            }catch(Exception second){
+                report.put("exit_error_retry",second.getMessage()==null?"Falha de comunicação":second.getMessage());
+            }
+        }
+        log("bit","Comando de saída BIT enviado; confirmação="+report.optBoolean("exit_confirmed_by_transport"),null);
+    }
+
+    /** Recovery command; does not enter BIT or run any test. */
+    private JSONObject bitExit(JSONObject b)throws Exception{
+        requireDevice();
+        if(demo)throw new IllegalArgumentException("Somente com o S40 real conectado.");
+        if(!"SAIR BIT".equals(b.optString("confirmation")))
+            throw new IllegalArgumentException("Digite SAIR BIT para enviar o comando de recuperação.");
+        JSONObject report=ok().put("procedure","request normal 99-1; retry after handshake if necessary");
+        attemptBitExit(report);
+        return report.put("warning","Se o S40 continuar em BIT ou não responder, desligue e religue pelo botão físico.");
+    }
+
+'''
+ss=ss[:start]+replacement+ss[end:]
+src.write_text(ss)
+g=Path("app/build.gradle")
+gg=g.read_text()
+assert "versionCode 4; versionName '0.4.0'" in gg
+g.write_text(gg.replace("versionCode 4; versionName '0.4.0'", "versionCode 5; versionName '0.5.0'"))
+html=Path("app/src/main/assets/index.html")
+hh=html.read_text()
+assert 'id="bitScan"' in hh
+hh=hh.replace('consulta 99-5 durante até 12 segundos', 'aguarda 10 segundos, consulta 99-5 pelo DID real')
+hh=hh.replace('<button id="bitScan" class="btn primary" disabled>Entrar no BIT, consultar lista e sair</button>',
+'''<button id="bitScan" class="btn primary" disabled>Entrar no BIT, consultar lista e sair</button>
+<button id="bitExit" class="btn danger" disabled>Tentar sair do BIT (recuperação)</button>
+<p class="note">Recuperação: ao tocar, você precisará confirmar SAIR BIT. Se não houver confirmação de saída, reinicie o S40 pelo botão físico.</p>''')
+hh=hh.replace("'rawReadBtn','runTestBtn','bitScan']", "'rawReadBtn','runTestBtn','bitScan','bitExit']")
+old="if(r.exit_error||r.exit_requested===false)toast("
+assert old in hh
+hh=hh.replace(old,"if(!r.exit_confirmed_by_transport)toast(")
+hh=hh.replace("async function refreshLogs(){",
+'''async function runBitExit(){if(!con||busy)return;if(!window.confirm('Enviar comando NORMAL para tentar sair do BIT?'))return;setBusy(true);try{let r=await api('bit-exit',{confirmation:'SAIR BIT'});$('bitOutput').textContent=jsonText(r);toast(r.exit_confirmed_by_transport?'Comando NORMAL reconhecido; confirme comportamento no robô.':'Sem confirmação; desligue e ligue o robô pelo botão físico.',!r.exit_confirmed_by_transport)}catch(e){toast('Saída não confirmada: '+e.message,true)}finally{setBusy(false)}}
+async function refreshLogs(){''')
+hh=hh.replace("$('bitScan').onclick=runBitList;", "$('bitScan').onclick=runBitList;$('bitExit').onclick=runBitExit;")
+html.write_text(hh)
+print("S40 Lab v0.5 patch applied: DID real, BIT stabilization, recovery UI")
