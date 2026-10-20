@@ -1846,3 +1846,90 @@ h=h.replace(needle,needle+"$('bitMonitorCopy').onclick=copyBitMonitor;")
 h=h.replace('S40 Lab v1.2 · Diagnóstico BIT','S40 Lab v1.3 · Captura durante o BIT')
 page.write_text(h)
 print("v1.3 patch: baseline, one-second asynchronous samples, change history, manual completion, copy button")
+
+
+# v1.4: bounded read-only exploration of service 99, no actuator command.
+b=Path("app/src/main/java/br/s40lab/app/S40Bridge.java")
+s=b.read_text()
+anchor='                case "bit-monitor-last":answer=bitMonitorLast(b);break;'
+assert anchor in s
+s=s.replace(anchor,anchor+'\n                case "bit-service-readonly-scan":answer=bitServiceReadonlyScan(b);break;')
+anchor='    private static final int[] BIT_FAULT_PIIDS={3,66,67,72};'
+assert anchor in s
+method=r'''
+    /**
+     * Vendor service 99: look only at eight property IDs.
+     * getProperties is read-only. Never issue setProperty or action here.
+     * Undocumented values are displayed verbatim, not interpreted as motor current.
+     */
+    private JSONObject bitServiceReadonlyScan(JSONObject b)throws Exception{
+        requireDevice();
+        if(demo)throw new IllegalArgumentException("Leitura disponível apenas com S40 conectado.");
+        final int[] ids={3,4,5,6,7,8,9,10};
+        JSONObject report=ok().put("procedure","MIoT get_properties only; siid=99, piid=3,4,5,6,7,8,9,10")
+                .put("read_only",true).put("no_motor_command",true)
+                .put("note","5 = catálogo BIT; 6 = calibração; 7 = estado de download de firmware. Outros IDs não documentados; resposta não é prova de corrente.");
+        JSONArray readings=new JSONArray();
+        for(int piid:ids){
+            JSONObject entry=new JSONObject().put("siid",99).put("piid",piid);
+            try{
+                JSONArray req=new JSONArray().put(new JSONObject()
+                  .put("did",device.deviceId()).put("siid",99).put("piid",piid));
+                JSONArray result=device.getProperties(req);
+                JSONObject response=result==null?null:result.optJSONObject(0);
+                if(response!=null){
+                    entry.put("code",response.optInt("code",-999));
+                    Object value=response.opt("value");
+                    entry.put("value",value==null?JSONObject.NULL:value);
+                }else entry.put("error","sem resposta individual");
+            }catch(Exception e){
+                entry.put("error",e.getMessage()==null?"erro de consulta":e.getMessage());
+            }
+            readings.put(entry);
+        }
+        return report.put("readings",readings)
+          .put("caution","Revise identificadores, links ou dados privados antes de compartilhar.");
+    }
+'''
+s=s.replace(anchor,method+'\n'+anchor)
+b.write_text(s)
+
+page=Path("app/src/main/assets/index.html")
+h=page.read_text()
+anchor='<button id="bitReadDiagnostics" class="btn primary" disabled>Ler códigos e mensagens do robô</button>'
+assert anchor in h
+h=h.replace(anchor,anchor+'''
+<button id="bitServiceScan" type="button" class="btn" disabled>Investigar serviço 99 (somente leitura)</button>
+<pre id="bitServiceScanResult" class="output">Nenhuma consulta realizada.</pre>
+<p class="note">Esta investigação consulta 99-3 a 99-10 sem escrever propriedades, sem executar testes e sem fazer upload. 99-7 é estado de atualização, não corrente. Revise dados identificáveis antes de compartilhar.</p>''')
+needle="'bitReadDiagnostics','bitFetchReport','bitMonitorCopy'"
+assert needle in h
+h=h.replace(needle,"'bitReadDiagnostics','bitFetchReport','bitMonitorCopy','bitServiceScan'")
+anchor='async function readBitDiagnostics(){'
+assert anchor in h
+h=h.replace(anchor,'''async function scanBitServiceReadonly(){
+ if(!con||busy)return;
+ setBusy(true);
+ $('bitServiceScanResult').textContent='Consultando propriedades de 99-3 a 99-10, somente leitura...';
+ try{
+  const r=await api('bit-service-readonly-scan',{});
+  $('bitServiceScanResult').textContent=jsonText(r);
+  toast('Leituras concluídas. Copie o resultado e oculte identificadores.');
+ }catch(e){
+  $('bitServiceScanResult').textContent=e.message;
+  toast('Consulta indisponível: '+e.message,true);
+ }finally{setBusy(false);}
+}
+'''+anchor)
+anchor="$('bitReadDiagnostics').onclick=readBitDiagnostics;"
+assert anchor in h
+h=h.replace(anchor,anchor+"$('bitServiceScan').onclick=scanBitServiceReadonly;")
+h=h.replace('S40 Lab v1.3 · Captura durante o BIT','S40 Lab v1.4 · Investigação MIoT')
+page.write_text(h)
+g=Path("app/build.gradle")
+src=g.read_text()
+import re
+new,count=re.subn(r"versionCode\s+\d+;\s+versionName\s+'[^']+'", "versionCode 14; versionName '1.4.0'",src)
+assert count==1, "Expected exactly one version declaration"
+g.write_text(new)
+print("v1.4: bounded, read-only property scans for 99-3 through 99-10")
