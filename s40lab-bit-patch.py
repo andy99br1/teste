@@ -1365,3 +1365,174 @@ html=html.replace('Para entrar digite ENTRAR BIT','Entrar no BIT com confirmaç�
 html=html.replace('S40 Lab v1.0 · BIT fluido','S40 Lab v1.1 · BIT sem espera')
 h.write_text(html)
 print("v1.1 patch: immediate test ACK, pass/fail buttons, test tile confirm, no typed phrases")
+
+
+# --- v1.2: Read fault registers and fetch original Xiaomi BIT report, if opted in
+java=Path("app/src/main/java/br/s40lab/app/S40Bridge.java")
+s=java.read_text()
+needle='                case "bit-session-finish":answer=bitSessionFinish(b);break;'
+assert needle in s
+s=s.replace(needle,needle+'''
+                case "bit-diagnostic-read":answer=bitDiagnosticRead(b);break;
+                case "bit-report-request":answer=bitReportRequest(b);break;''')
+anchor='    /** Manual acknowledgment from the operator, not an automatic diagnosis from firmware. */'
+assert anchor in s
+methods=r'''
+    /** Read-only telemetry: fault, fault list, action result, notices, BIT catalog. */
+    private JSONObject bitDiagnosticRead(JSONObject b)throws Exception{
+        requireDevice();
+        if(demo)throw new IllegalArgumentException("Diagnóstico somente com o S40 real.");
+        JSONObject report=ok().put("procedure","read MIoT 2-3,2-66,2-67,2-72 and BIT 99-5; no motor command")
+            .put("read_only",true);
+        JSONArray pairs=new JSONArray();
+        int[] ids={3,66,67,72};
+        for(int id:ids){
+            pairs.put(new JSONObject().put("did",device.deviceId())
+                .put("siid",2).put("piid",id));
+        }
+        JSONArray batchResult=null;
+        try{
+            batchResult=device.getProperties(pairs);
+            report.put("vacuum_raw",batchResult);
+        }catch(Exception e){
+            report.put("vacuum_read_error",e.getMessage()==null?"Sem resposta":e.getMessage());
+        }
+        JSONObject values=new JSONObject();
+        for(int i=0;i<ids.length;i++){
+            JSONObject item=(batchResult==null)?null:batchResult.optJSONObject(i);
+            JSONObject value=new JSONObject().put("siid",2).put("piid",ids[i]);
+            if(item!=null){
+                value.put("code",item.optInt("code",-1))
+                     .put("value",item.opt("value")==null?JSONObject.NULL:item.opt("value"));
+            }else{
+                JSONArray request=new JSONArray().put(pairs.optJSONObject(i));
+                try{
+                    JSONArray one=device.getProperties(request);
+                    JSONObject v=one.optJSONObject(0);
+                    if(v!=null){
+                        value.put("code",v.optInt("code",-1))
+                             .put("value",v.opt("value")==null?JSONObject.NULL:v.opt("value"));
+                    }else value.put("error","Sem resultado");
+                }catch(Exception e){value.put("error",e.getMessage()==null?"Timeout":e.getMessage());}
+            }
+            values.put("2-"+ids[i],value);
+        }
+        report.put("diagnostics",values);
+        try{
+            JSONObject catalogNow=liveBitCatalog();
+            report.put("bit_catalog_present",catalogNow!=null);
+            report.put("bit_catalog",catalogNow==null?JSONObject.NULL:catalogNow);
+        }catch(Exception e){
+            report.put("bit_catalog_error",e.getMessage()==null?"Sem resposta":e.getMessage());
+        }
+        return report.put("note","Os registros podem não conter resultado BIT. Um erro em 2-3 é da operação geral, não prova a causa elétrica específica.");
+    }
+
+    /**
+     * Same action used by Xiaomi Home's "Upload Report" button in the BIT screen.
+     * May upload diagnostic data; never run without the user's explicit opt-in.
+     */
+    private JSONObject bitReportRequest(JSONObject b)throws Exception{
+        requireDevice();
+        if(demo)throw new IllegalArgumentException("Relatório disponível somente no S40 real.");
+        if(!b.optBoolean("report_upload_consent",false))
+            throw new IllegalArgumentException("Autorize o envio/geração do relatório técnico.");
+        JSONObject catalogNow=liveBitCatalog();
+        if(catalogNow==null)
+            throw new IllegalStateException("Relatório BIT: entre no modo BIT e confirme a lista 99-5 primeiro.");
+        JSONObject report=ok().put("procedure",
+            "Xiaomi Home Upload Report equivalent: MIoT action 99-1 inputs=[]; may upload technical report")
+            .put("bit_catalog_confirmed",true);
+        Object raw=device.action(99,1,new JSONArray());
+        report.put("raw_action_result",safe(raw));
+        if(raw instanceof JSONObject){
+            JSONObject obj=(JSONObject)raw;
+            JSONArray out=obj.optJSONArray("out");
+            if(out!=null&&out.length()>0){
+                JSONObject first=out.optJSONObject(0);
+                if(first!=null){
+                    Object value=first.opt("value");
+                    if(value!=null&&!JSONObject.NULL.equals(value)){
+                        String rawText=String.valueOf(value);
+                        report.put("qr_payload",rawText).put("qr_payload_length",rawText.length());
+                        try{report.put("parsed_report",new JSONObject(rawText));}
+                        catch(Exception e){
+                            try{report.put("parsed_report",new JSONArray(rawText));}
+                            catch(Exception ignored){}
+                        }
+                    }
+                }
+            }
+        }
+        return report.put("note",
+          "O aplicativo Xiaomi Home transforma o valor do relatório em QR Code. O conteúdo pode incluir dados identificáveis do robô. Revise e oculte identificadores antes de compartilhar.");
+    }
+
+'''
+s=s.replace(anchor,methods+anchor)
+java.write_text(s)
+grad=Path("app/build.gradle");g=grad.read_text()
+assert "versionCode 11; versionName '1.1.0'" in g
+grad.write_text(g.replace("versionCode 11; versionName '1.1.0'","versionCode 12; versionName '1.2.0'"))
+page=Path("app/src/main/assets/index.html")
+h=page.read_text()
+anchor='<div class="card stack section" id="bitAllPanel"'
+assert anchor in h
+panel='''<div class="card stack" id="bitDiagnostics" style="margin-top:16px">
+<h3>Diagnóstico detalhado — experimental</h3>
+<p>Leitura sem acionar motores: falha geral (2-3), lista de falhas (2-66), resultado de ação (2-67), avisos (2-72) e estado do BIT (99-5).</p>
+<button id="bitReadDiagnostics" class="btn primary" disabled>Ler códigos e mensagens do robô</button>
+<pre id="bitDiagnosticsResult" class="output">Nenhuma leitura ainda.</pre>
+<p class="note">Relatório original do Xiaomi Home: opção "Upload Report". Este comando pode transmitir dados técnicos para a Xiaomi e retornar um conteúdo de QR Code. Só execute se concordar.</p>
+<button id="bitFetchReport" class="btn" disabled>Gerar/obter relatório BIT (pode enviar dados)</button>
+<pre id="bitReportResult" class="output">Relatório não solicitado.</pre>
+</div>
+'''
+h=h.replace(anchor,panel+anchor)
+# Busy/disconnected state: new buttons included.
+needle="'bitSessionStart','bitSessionStatus','bitExit','bitOutcomePass','bitOutcomeFail','bitOutcomeUnknown'"
+assert needle in h
+h=h.replace(needle,
+        "'bitSessionStart','bitSessionStatus','bitExit','bitOutcomePass','bitOutcomeFail','bitOutcomeUnknown','bitReadDiagnostics','bitFetchReport'")
+# add code right before async function refreshLogs
+anchor='async function refreshLogs(){'
+assert anchor in h
+js=r'''
+async function readBitDiagnostics(){
+ if(!con||busy)return;
+ setBusy(true);
+ $('bitDiagnosticsResult').textContent='Consultando 2-3, 2-66, 2-67, 2-72 e 99-5...';
+ try{
+   const r=await api('bit-diagnostic-read',{});
+   $('bitDiagnosticsResult').textContent=jsonText(r);
+   toast('Leitura concluída. Veja os códigos brutos.');
+ }catch(e){
+   $('bitDiagnosticsResult').textContent=e.message;
+   toast('Leitura não concluída: '+e.message,true);
+ }finally{setBusy(false);}
+}
+async function getBitTechnicalReport(){
+ if(!con||busy)return;
+ if(!bitSessionUiActive){
+  toast('Entre no BIT antes de pedir o relatório.',true);return;
+ }
+ if(!window.confirm('O Xiaomi Home chama esta função de "Upload Report". Ela PODE transmitir dados técnicos do S40 para a Xiaomi. Deseja continuar e solicitar o relatório?'))return;
+ setBusy(true);
+ $('bitReportResult').textContent='Solicitando relatório técnico original do S40...';
+ try{
+   const r=await api('bit-report-request',{report_upload_consent:true});
+   $('bitReportResult').textContent=jsonText(r);
+   toast(r.qr_payload?'Relatório BIT recebido. Verifique dados antes de compartilhar.':'Resposta recebida, mas sem conteúdo QR confirmado.',!r.qr_payload);
+ }catch(e){
+   $('bitReportResult').textContent=e.message;
+   toast('Relatório indisponível: '+e.message,true);
+ }finally{setBusy(false);}
+}
+'''
+h=h.replace(anchor,js+anchor)
+needle="$('bitOutcomeUnknown').onclick=()=>finishBitTest('unknown');"
+assert needle in h
+h=h.replace(needle,needle+"$('bitReadDiagnostics').onclick=readBitDiagnostics;$('bitFetchReport').onclick=getBitTechnicalReport;")
+h=h.replace('S40 Lab v1.1 · BIT sem espera','S40 Lab v1.2 · Diagnóstico BIT')
+page.write_text(h)
+print("v1.2: MIoT read-only fault snapshot + explicit-opt-in Xiaomi BIT QR report action")
