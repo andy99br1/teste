@@ -1947,9 +1947,9 @@ import android.content.ClipData;""",1)
 anchor="    private final JSONObject catalog;"
 assert anchor in s
 s=s.replace(anchor,"    private final Context androidContext;\n"+anchor,1)
-anchor="    public S40Bridge(AssetManager assets){"
+anchor="    public S40Bridge(AssetManager assets, WebView webView){"
 assert anchor in s
-s=s.replace(anchor,"    public S40Bridge(AssetManager assets, Context context){\n        androidContext=context.getApplicationContext();",1)
+s=s.replace(anchor,"    public S40Bridge(AssetManager assets, WebView webView, Context context){\n        androidContext=context.getApplicationContext();",1)
 anchor="    @JavascriptInterface\n    public synchronized String request(String raw){"
 assert anchor in s
 s=s.replace(anchor,'''    @JavascriptInterface
@@ -1967,9 +1967,9 @@ b.write_text(s)
 
 activity=Path("app/src/main/java/br/s40lab/app/MainActivity.java")
 a=activity.read_text()
-anchor='new S40Bridge(getAssets())'
+anchor='new S40Bridge(getAssets(),web)'
 assert anchor in a
-activity.write_text(a.replace(anchor,'new S40Bridge(getAssets(),this)',1))
+activity.write_text(a.replace(anchor,'new S40Bridge(getAssets(),web,this)',1))
 
 page=Path("app/src/main/assets/index.html")
 h=page.read_text()
