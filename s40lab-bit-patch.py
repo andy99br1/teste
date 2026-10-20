@@ -1536,3 +1536,33 @@ h=h.replace(needle,needle+"$('bitReadDiagnostics').onclick=readBitDiagnostics;$(
 h=h.replace('S40 Lab v1.1 · BIT sem espera','S40 Lab v1.2 · Diagnóstico BIT')
 page.write_text(h)
 print("v1.2: MIoT read-only fault snapshot + explicit-opt-in Xiaomi BIT QR report action")
+
+
+# v1.2 protocol correction: hidden BIT actions require real device ID, same as Xiaomi Home
+socket=Path("app/src/main/java/br/s40lab/app/MiiSocket.java")
+t=socket.read_text()
+anchor="    public Object setProperty(int s,int p,Object value) throws Exception {"
+assert anchor in t
+method=r'''
+    /** Hidden service action with the actual miIO DID (not siid-aiid alias). */
+    public Object actionWithDeviceId(int siid,int aiid,JSONArray inputs)throws Exception{
+        JSONObject req=new JSONObject().put("did",deviceId())
+            .put("siid",siid).put("aiid",aiid).put("in",inputs);
+        JSONObject raw=command("action",req,false);
+        Object result=raw.opt("result");
+        if(result instanceof JSONObject && ((JSONObject)result).optInt("code",0)!=0)
+            throw new IllegalStateException("Ação BIT recusada: código "+
+                ((JSONObject)result).optInt("code"));
+        return result!=null?result:raw;
+    }
+
+'''
+t=t.replace(anchor,method+anchor)
+socket.write_text(t)
+bridge=Path("app/src/main/java/br/s40lab/app/S40Bridge.java")
+s=bridge.read_text()
+assert "Object raw=device.action(99,1,new JSONArray());" in s
+s=s.replace("Object raw=device.action(99,1,new JSONArray());",
+            "Object raw=device.actionWithDeviceId(99,1,new JSONArray());")
+bridge.write_text(s)
+print("Using real miIO DID for BIT report action; no repeated write commands")
