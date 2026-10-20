@@ -1258,7 +1258,7 @@ html=html.replace(needle,needle+'''
 </div>''')
 # No need for old data form references in setupBitTestCatalog.
 start=html.index('function setupBitTestCatalog(){')
-end=html.index('async function runSelectedBit(){',start)
+end=html.index('\n}\n',start)+len('\n}\n')
 replacement=r'''
 function setupBitTestCatalog(){
  document.querySelectorAll('.bit-test-choice').forEach(btn=>{
