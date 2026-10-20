@@ -191,3 +191,103 @@ async function refreshLogs(){''')
 hh=hh.replace("$('bitScan').onclick=runBitList;", "$('bitScan').onclick=runBitList;$('bitExit').onclick=runBitExit;")
 html.write_text(hh)
 print("S40 Lab v0.5 patch applied: DID real, BIT stabilization, recovery UI")
+
+
+# --- v0.6: isolated main brush BIT test (firmware-defined 30 seconds)
+src=Path("app/src/main/java/br/s40lab/app/S40Bridge.java")
+ss=src.read_text()
+assert 'case "bit-exit":answer=bitExit(b);break;' in ss
+ss=ss.replace('case "bit-exit":answer=bitExit(b);break;',
+              'case "bit-exit":answer=bitExit(b);break;\n                case "bit-main-brush":answer=bitMainBrush(b);break;')
+anchor='    /** Recovery command; does not enter BIT or run any test. */'
+assert anchor in ss
+method=r'''
+    /** S40/H40 SOP: Rolling brush test runs about 30 seconds and announces pass/fail. */
+    private JSONObject bitMainBrush(JSONObject b)throws Exception{
+        requireDevice();
+        if(demo)throw new IllegalArgumentException("BIT indisponível em demonstração.");
+        if(!"TESTAR ESCOVA".equals(b.optString("confirmation"))||!b.optBoolean("safe_location",false))
+            throw new IllegalArgumentException("Confirme a posição segura e digite TESTAR ESCOVA.");
+        JSONObject report=ok().put("procedure","enter BIT -> 10s -> confirm code 5 in 99-5 -> execute 99-2=5 -> wait 33s -> normal");
+        JSONArray req=new JSONArray().put(new JSONObject()
+            .put("did",device.deviceId()).put("siid",99).put("piid",5));
+        JSONArray errors=new JSONArray();
+        boolean entered=false;
+        try{
+            report.put("enter_ack",safe(device.setProperty(99,1,"BIT")));
+            entered=true;
+            SystemClock.sleep(10000);
+            JSONObject testList=null;
+            for(int i=0;i<3;i++){
+                try{
+                    if(i>0)device.handshake();
+                    JSONArray reply=device.getProperties(req);
+                    JSONObject item=reply.optJSONObject(0);
+                    if(item!=null&&item.optInt("code",-1)==0){
+                        Object raw=item.opt("value");
+                        if(raw instanceof JSONObject)testList=(JSONObject)raw;
+                        else if(raw!=null&&!JSONObject.NULL.equals(raw)&&!String.valueOf(raw).trim().isEmpty())
+                            testList=new JSONObject(String.valueOf(raw));
+                        if(testList!=null)break;
+                    }
+                    errors.put(new JSONObject().put("read_attempt",i+1).put("reply",reply));
+                }catch(Exception e){
+                    errors.put(new JSONObject().put("read_attempt",i+1).put("error",
+                        e.getMessage()==null?"Falha de comunicação":e.getMessage()));
+                }
+                SystemClock.sleep(1300);
+            }
+            if(testList==null)throw new IllegalStateException("Lista BIT indisponível. Nenhum teste iniciado.");
+            report.put("list_confirmed",testList);
+            if(!testList.has("Rolling brush testing") || testList.optInt("Rolling brush testing",-1)!=5)
+                throw new IllegalStateException("ID da escova diferente de 5. Teste bloqueado.");
+            report.put("test_start_ack",safe(device.setProperty(99,2,5)));
+            report.put("test_command_sent",true);
+            report.put("expected_test","Rolling brush testing, duração oficial ~30 segundos");
+            SystemClock.sleep(33000);
+            report.put("observation_window_seconds",33);
+        }catch(Exception e){
+            report.put("test_error",e.getMessage()==null?"Falha de comunicação":e.getMessage());
+        }finally{
+            report.put("entered_bit",entered).put("read_errors",errors);
+            attemptBitExit(report);
+        }
+        return report.put("warning","O teste pode parar sozinho por falha, ou continuar se a rede cair. Somente o robô anuncia PASS/FAIL. Não encoste na escova; desligue pelo botão físico se necessário.");
+    }
+
+'''
+ss=ss.replace(anchor,method+anchor)
+src.write_text(ss)
+g=Path("app/build.gradle")
+gg=g.read_text()
+assert "versionCode 5; versionName '0.5.0'" in gg
+g.write_text(gg.replace("versionCode 5; versionName '0.5.0'", "versionCode 6; versionName '0.6.0'"))
+html=Path("app/src/main/assets/index.html")
+hh=html.read_text()
+needle='<button id="bitExit" class="btn danger" disabled>Tentar sair do BIT (recuperação)</button>'
+assert needle in hh
+hh=hh.replace(needle,'''
+<div class="card stack" style="margin-top:18px">
+<h3>Teste individual da escova principal</h3>
+<p>Teste BIT oficial Rolling brush testing (ID 5). A escova pode girar por cerca de 30 segundos. O robô anuncia o resultado em inglês. Não encoste nas peças durante o teste.</p>
+<label for="brushBitConfirm">Digite TESTAR ESCOVA</label>
+<input id="brushBitConfirm" placeholder="TESTAR ESCOVA" autocomplete="off">
+<button id="brushBitRun" class="btn primary" disabled>Testar somente a escova principal (~30 s)</button>
+<pre id="brushBitResult" class="output">Aguardando teste.</pre>
+</div>
+<div style="margin-top:16px">'''+needle+'''</div>''')
+hh=hh.replace("'runTestBtn','bitScan','bitExit']", "'runTestBtn','bitScan','bitExit','brushBitRun']")
+js=r'''
+async function runBrushBit(){if(!con||busy)return;setBusy(true);$('brushBitResult').textContent='Entrada BIT, consulta da lista e teste por cerca de 30 segundos... NÃO TOQUE NA ESCOVA. Aguarde a saída.';try{
+ const r=await api('bit-main-brush',{confirmation:$('brushBitConfirm').value.trim(),safe_location:$('bitSafety').checked});
+ $('brushBitResult').textContent=jsonText(r);
+ if(!r.exit_confirmed_by_transport)toast('Saída BIT não confirmada! Desligue e ligue fisicamente.',true);
+ else if(!r.test_command_sent)toast('Teste não executado; confira os detalhes.',true);
+ else toast('Teste enviado. Informe a mensagem falada: passed ou failed.');
+}catch(e){$('brushBitResult').textContent=e.message;toast('Erro: '+e.message,true)}finally{setBusy(false)}}
+'''
+assert 'async function runBitExit(){' in hh
+hh=hh.replace('async function runBitExit(){',js+'\nasync function runBitExit(){')
+hh=hh.replace("$('bitExit').onclick=runBitExit;", "$('bitExit').onclick=runBitExit;$('brushBitRun').onclick=runBrushBit;")
+html.write_text(hh)
+print("S40 Lab v0.6 patch applied: 30-second Rolling brush BIT, verified code 5, safe exit")
